@@ -45,7 +45,54 @@ export function createLogger(component: string): pino.Logger {
     },
   });
 
-  return logger;
+  // Wrap logger to fix TypeScript strict mode issues with Pino's overloads
+  const wrappedLogger = {
+    info: (msg: string, obj?: Record<string, unknown>) => {
+      if (obj) {
+        logger.info(obj, msg);
+      } else {
+        logger.info(msg);
+      }
+    },
+    debug: (msg: string, obj?: Record<string, unknown>) => {
+      if (obj) {
+        logger.debug(obj, msg);
+      } else {
+        logger.debug(msg);
+      }
+    },
+    warn: (msg: string, obj?: Record<string, unknown>) => {
+      if (obj) {
+        logger.warn(obj, msg);
+      } else {
+        logger.warn(msg);
+      }
+    },
+    error: (msg: string, obj?: Record<string, unknown>) => {
+      if (obj) {
+        logger.error(obj, msg);
+      } else {
+        logger.error(msg);
+      }
+    },
+    fatal: (msg: string, obj?: Record<string, unknown>) => {
+      if (obj) {
+        logger.fatal(obj, msg);
+      } else {
+        logger.fatal(msg);
+      }
+    },
+    trace: (msg: string, obj?: Record<string, unknown>) => {
+      if (obj) {
+        logger.trace(obj, msg);
+      } else {
+        logger.trace(msg);
+      }
+    },
+    child: (bindings: pino.Bindings) => logger.child(bindings),
+  } as pino.Logger;
+
+  return wrappedLogger;
 }
 
 /**
