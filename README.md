@@ -211,6 +211,32 @@ cp .env.docker .env
 docker-compose up -d
 ```
 
+### Using Portainer
+
+Deploy with Portainer for easy management:
+
+```bash
+# 1. Copy the stack file
+cp portainer-stack-simple.yml my-stack.yml
+
+# 2. In Portainer UI:
+#    - Go to Stacks > Add Stack
+#    - Name: notebooklm-mcp
+#    - Paste stack content
+#    - Add environment variables
+#    - Deploy
+
+# See PORTAINER_GUIDE.md for detailed instructions
+```
+
+**Quick Portainer Setup:**
+1. Place service account key at `/opt/notebooklm/service-account-key.json` on Docker host
+2. In Portainer, create stack with `portainer-stack-simple.yml`
+3. Add required environment variables (see PORTAINER_GUIDE.md)
+4. Deploy and monitor via Portainer UI
+
+For complete Portainer deployment guide, see [PORTAINER_GUIDE.md](PORTAINER_GUIDE.md)
+
 ## MCP Client Configuration
 
 ### Claude Desktop
