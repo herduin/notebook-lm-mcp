@@ -16,6 +16,7 @@ build/
 # Credentials
 *.json
 !package.json
+!package-lock.json
 !tsconfig.json
 !jest.config.json
 !.eslintrc.json
