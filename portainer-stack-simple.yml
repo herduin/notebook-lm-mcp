@@ -78,6 +78,10 @@ services:
       - GOOGLE_APPLICATION_CREDENTIALS=/credentials/key.json
       - MODEL=${MODEL:-gemini-1.5-pro-002}
       - PORT=3000
+      - ENABLE_HTTP_API=true
+      - HTTP_API_PORT=3100
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - API_KEY=${API_KEY:-}
       - CACHE_TTL=${CACHE_TTL:-300}
       - MAX_RETRIES=${MAX_RETRIES:-3}
       - RETRY_DELAY_MS=${RETRY_DELAY_MS:-1000}
@@ -94,7 +98,8 @@ services:
       # - notebooklm-credentials:/credentials:ro
 
     ports:
-      - "3000:3000"
+      - "3000:3000"   # Health check endpoint
+      - "3100:3100"   # HTTP API endpoint for remote access
 
     # Resource limits
     deploy:

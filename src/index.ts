@@ -2,9 +2,11 @@
 
 import { loadConfig, validateEnvironment } from './config/index.js';
 import { NotebookLMMCPServer } from './server/index.js';
+import { HttpApiServer } from './server/http-api.js';
 import { HealthServer } from './health/index.js';
 import { AuthManager } from './auth/index.js';
 import { NotebookLMClient } from './notebook/index.js';
+import { NotebookLMTools } from './tools/index.js';
 import { createLogger } from './utils/logger.js';
 
 const logger = createLogger('main');
@@ -28,17 +30,27 @@ async function main(): Promise<void> {
       notebookId: config.notebookId,
       model: config.model,
       port: config.port,
+      httpApiEnabled: process.env.ENABLE_HTTP_API !== 'false',
     });
 
-    // Initialize components for health server
+    // Initialize components
     const auth = new AuthManager(config);
     const client = new NotebookLMClient(auth, config);
+    const tools = new NotebookLMTools(client);
 
-    // Start health server in background
+    // Start health server
     const healthServer = new HealthServer(config, auth, client);
     await healthServer.start();
 
-    // Create and start MCP server
+    // Start HTTP API server (for remote access)
+    let httpApiServer: HttpApiServer | null = null;
+    if (process.env.ENABLE_HTTP_API !== 'false') {
+      httpApiServer = new HttpApiServer(tools, config);
+      const httpPort = process.env.HTTP_API_PORT ? parseInt(process.env.HTTP_API_PORT) : config.port + 100;
+      await httpApiServer.start(httpPort);
+    }
+
+    // Create and start MCP server (stdio)
     const mcpServer = new NotebookLMMCPServer(config);
     await mcpServer.start();
 
@@ -47,7 +59,11 @@ async function main(): Promise<void> {
       logger.info(`Received ${signal}, shutting down gracefully...`);
 
       try {
-        await Promise.all([mcpServer.stop(), healthServer.stop()]);
+        const shutdownPromises = [mcpServer.stop(), healthServer.stop()];
+        if (httpApiServer) {
+          shutdownPromises.push(httpApiServer.stop());
+        }
+        await Promise.all(shutdownPromises);
         logger.info('Shutdown complete');
         process.exit(0);
       } catch (error) {
