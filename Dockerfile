@@ -1,6 +1,11 @@
 # Build stage
 FROM node:22-alpine AS builder
 
+# Build arguments for metadata
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
 WORKDIR /app
 
 # Copy package files
@@ -18,6 +23,24 @@ RUN npm run build
 
 # Production stage
 FROM node:22-alpine
+
+# Build arguments for metadata
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+# Labels for metadata (OCI standard)
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.authors="NotebookLM MCP Server"
+LABEL org.opencontainers.image.url="https://github.com/herduin/notebook-lm-mcp"
+LABEL org.opencontainers.image.documentation="https://github.com/herduin/notebook-lm-mcp/blob/main/README.md"
+LABEL org.opencontainers.image.source="https://github.com/herduin/notebook-lm-mcp"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.vendor="NotebookLM MCP"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="NotebookLM MCP Server"
+LABEL org.opencontainers.image.description="Production-ready MCP server for Google NotebookLM Enterprise API"
 
 # Install dumb-init for proper signal handling
 RUN apk add --no-cache dumb-init
@@ -46,8 +69,8 @@ USER nodejs
 # Set environment
 ENV NODE_ENV=production
 
-# Expose health check port
-EXPOSE 3000
+# Expose ports
+EXPOSE 3000 3100
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

@@ -57,14 +57,14 @@ version: '3.8'
 
 services:
   notebooklm-mcp:
-    # Option 1: Build from source (slower, requires Git access from Docker host)
-    build:
-      context: https://github.com/herduin/notebook-lm-mcp.git#main
-      dockerfile: Dockerfile
+    # Option 1: Use pre-built image from GitHub Container Registry (Recommended)
+    image: ghcr.io/herduin/notebook-lm-mcp:latest
 
-    # Option 2: Use pre-built image (faster, recommended for production)
-    # Uncomment and replace with your image name:
-    # image: your-dockerhub-username/notebooklm-mcp-server:latest
+    # Option 2: Build from source (slower, requires Git access from Docker host)
+    # Uncomment to build instead of using pre-built image:
+    # build:
+    #   context: https://github.com/herduin/notebook-lm-mcp.git#main
+    #   dockerfile: Dockerfile
 
     container_name: notebooklm-mcp-server
     restart: unless-stopped

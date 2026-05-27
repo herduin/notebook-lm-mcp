@@ -202,6 +202,28 @@ npm start
 
 ### Using Docker
 
+#### Option 1: Pre-built Image from GitHub Container Registry (Recommended)
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/herduin/notebook-lm-mcp:latest
+
+# Run the container
+docker run -d \
+  --name notebooklm-mcp \
+  -p 3000:3000 \
+  -p 3100:3100 \
+  -v $(pwd)/service-account-key.json:/credentials/key.json:ro \
+  -e GOOGLE_PROJECT_ID=your-project-id \
+  -e GOOGLE_PROJECT_NUMBER=123456789 \
+  -e GOOGLE_REGION=us-central1 \
+  -e NOTEBOOK_ID=your-notebook-id \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/credentials/key.json \
+  ghcr.io/herduin/notebook-lm-mcp:latest
+```
+
+#### Option 2: Build Locally
+
 ```bash
 # Build the image
 docker build -t notebooklm-mcp-server .
@@ -210,6 +232,8 @@ docker build -t notebooklm-mcp-server .
 cp .env.docker .env
 docker-compose up -d
 ```
+
+**See [DOCKER_IMAGE_GUIDE.md](DOCKER_IMAGE_GUIDE.md) for complete Docker usage guide.**
 
 ### Using Portainer
 
