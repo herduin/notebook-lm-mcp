@@ -1,0 +1,117 @@
+# Portainer Stack for NotebookLM MCP Server
+#
+# SETUP INSTRUCTIONS:
+# 1. In Portainer, go to Stacks > Add Stack
+# 2. Name your stack (e.g., "notebooklm-mcp")
+# 3. Paste this file content in the Web Editor
+# 4. Scroll down to "Environment variables" section
+# 5. Add the following required variables:
+#    - GOOGLE_PROJECT_ID: Your Google Cloud Project ID
+#    - GOOGLE_PROJECT_NUMBER: Your Google Cloud Project Number
+#    - GOOGLE_REGION: Google Cloud region (default: us-central1)
+#    - NOTEBOOK_ID: Your NotebookLM notebook ID
+#    - GOOGLE_CREDENTIALS_JSON: Content of your service account key JSON (paste the entire JSON)
+#
+# 6. Optional environment variables:
+#    - MODEL: AI model to use (default: gemini-1.5-pro-002)
+#    - PORT: Server port (default: 3000)
+#    - CACHE_TTL: Cache TTL in seconds (default: 300)
+#    - MAX_RETRIES: Maximum retry attempts (default: 3)
+#    - RETRY_DELAY_MS: Retry delay in milliseconds (default: 1000)
+#    - REQUEST_TIMEOUT_MS: Request timeout in milliseconds (default: 30000)
+#    - MAX_QUESTION_LENGTH: Maximum question length (default: 4000)
+#    - LOG_LEVEL: Logging level (default: info)
+#
+# 7. Click "Deploy the stack"
+#
+# IMPORTANT: This stack will build the Docker image from GitHub repository
+# Alternatively, you can pre-build and push the image to Docker Hub, then use that image
+
+version: '3.8'
+
+services:
+  notebooklm-mcp:
+    # Option 1: Build from GitHub (requires internet access from Portainer host)
+    build:
+      context: https://github.com/herduin/notebook-lm-mcp.git#main
+      dockerfile: Dockerfile
+
+    # Option 2: Use pre-built image (uncomment and replace with your image)
+    # image: your-dockerhub-username/notebooklm-mcp-server:latest
+
+    container_name: notebooklm-mcp-server
+    restart: unless-stopped
+
+    environment:
+      - NODE_ENV=production
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}
+      - GOOGLE_PROJECT_NUMBER=${GOOGLE_PROJECT_NUMBER}
+      - GOOGLE_REGION=${GOOGLE_REGION:-us-central1}
+      - NOTEBOOK_ID=${NOTEBOOK_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/credentials/key.json
+      - MODEL=${MODEL:-gemini-1.5-pro-002}
+      - PORT=${PORT:-3000}
+      - CACHE_TTL=${CACHE_TTL:-300}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_DELAY_MS=${RETRY_DELAY_MS:-1000}
+      - REQUEST_TIMEOUT_MS=${REQUEST_TIMEOUT_MS:-30000}
+      - MAX_QUESTION_LENGTH=${MAX_QUESTION_LENGTH:-4000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+    # Portainer doesn't easily support file mounts from host
+    # Instead, we use a config/secret or volume
+    configs:
+      - source: google_credentials
+        target: /credentials/key.json
+        mode: 0400
+
+    ports:
+      - "${PORT:-3000}:3000"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    networks:
+      - notebooklm-network
+
+# Define the config for Google credentials
+# In Portainer, you'll need to create this config from the environment variable
+configs:
+  google_credentials:
+    # Portainer will create this from GOOGLE_CREDENTIALS_JSON environment variable
+    # The content should be your service account JSON key
+    external: false
+    file: /dev/null  # Placeholder - will be overridden by Portainer
+
+networks:
+  notebooklm-network:
+    driver: bridge

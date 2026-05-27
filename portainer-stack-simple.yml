@@ -1,0 +1,153 @@
+# Portainer Stack for NotebookLM MCP Server (Simplified)
+#
+# SETUP INSTRUCTIONS:
+# ===================
+#
+# STEP 1: Prepare Google Cloud Credentials
+# ------------------------------------------
+# Before deploying, you need to prepare your service account key:
+#
+# Option A: Create a Docker volume with credentials
+#   1. In Portainer: Volumes > Add Volume
+#   2. Name: "notebooklm-credentials"
+#   3. After creating, you need to manually copy your service-account-key.json
+#      to the volume location on the host
+#
+# Option B: Use host path (easier but less portable)
+#   1. Place your service-account-key.json on the Docker host
+#   2. Note the full path (e.g., /opt/notebooklm/service-account-key.json)
+#   3. Update the volumes section below to use this path
+#
+# STEP 2: Configure Environment Variables in Portainer
+# -----------------------------------------------------
+# When creating the stack in Portainer, add these environment variables:
+#
+# REQUIRED:
+#   GOOGLE_PROJECT_ID: your-google-project-id
+#   GOOGLE_PROJECT_NUMBER: 123456789012
+#   GOOGLE_REGION: us-central1
+#   NOTEBOOK_ID: your-notebook-id
+#   GOOGLE_CREDENTIALS_PATH: /opt/notebooklm/service-account-key.json (or your path)
+#
+# OPTIONAL:
+#   MODEL: gemini-1.5-pro-002
+#   PORT: 3000
+#   CACHE_TTL: 300
+#   MAX_RETRIES: 3
+#   LOG_LEVEL: info
+#
+# STEP 3: Deploy
+# ---------------
+# 1. Copy this entire file
+# 2. In Portainer: Stacks > Add Stack
+# 3. Name: notebooklm-mcp
+# 4. Paste this content
+# 5. Add environment variables
+# 6. Deploy the stack
+#
+# STEP 4: Pre-build the Image (Recommended)
+# ------------------------------------------
+# For faster deployment, pre-build the image:
+#   docker build -t notebooklm-mcp-server:latest https://github.com/herduin/notebook-lm-mcp.git#main
+#   docker tag notebooklm-mcp-server:latest your-registry/notebooklm-mcp-server:latest
+#   docker push your-registry/notebooklm-mcp-server:latest
+# Then uncomment the "image:" line below and comment out the "build:" section
+
+version: '3.8'
+
+services:
+  notebooklm-mcp:
+    # Option 1: Use pre-built image from GitHub Container Registry (Recommended)
+    image: ghcr.io/herduin/notebook-lm-mcp:latest
+
+    # Option 2: Build from source (slower, requires Git access from Docker host)
+    # Uncomment to build instead of using pre-built image:
+    # build:
+    #   context: https://github.com/herduin/notebook-lm-mcp.git#main
+    #   dockerfile: Dockerfile
+
+    container_name: notebooklm-mcp-server
+    restart: unless-stopped
+
+    environment:
+      - NODE_ENV=production
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}
+      - GOOGLE_PROJECT_NUMBER=${GOOGLE_PROJECT_NUMBER}
+      - GOOGLE_REGION=${GOOGLE_REGION:-us-central1}
+      - NOTEBOOK_ID=${NOTEBOOK_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/credentials/key.json
+      - MODEL=${MODEL:-gemini-1.5-pro-002}
+      - PORT=3000
+      - ENABLE_HTTP_API=true
+      - HTTP_API_PORT=3100
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - API_KEY=${API_KEY:-}
+      - CACHE_TTL=${CACHE_TTL:-300}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_DELAY_MS=${RETRY_DELAY_MS:-1000}
+      - REQUEST_TIMEOUT_MS=${REQUEST_TIMEOUT_MS:-30000}
+      - MAX_QUESTION_LENGTH=${MAX_QUESTION_LENGTH:-4000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+    volumes:
+      # Mount Google Cloud credentials from host path
+      # IMPORTANT: Replace this path with your actual credentials path
+      - ${GOOGLE_CREDENTIALS_PATH:-./service-account-key.json}:/credentials/key.json:ro
+
+      # Alternative: Use named volume (you need to manually copy credentials to the volume)
+      # - notebooklm-credentials:/credentials:ro
+
+    ports:
+      - "3000:3000"   # Health check endpoint
+      - "3100:3100"   # HTTP API endpoint for remote access
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Read-only root filesystem for security
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    networks:
+      - notebooklm-network
+
+    labels:
+      - "com.notebooklm.description=NotebookLM MCP Server"
+      - "com.notebooklm.version=1.0.0"
+
+# Optional: Named volume for credentials
+# Uncomment if you prefer using volumes instead of host path
+# volumes:
+#   notebooklm-credentials:
+#     driver: local
+
+networks:
+  notebooklm-network:
+    driver: bridge
