@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 import { loadConfig, validateEnvironment } from './config/index.js';
-import { NotebookLMMCPServer } from './server/index.js';
-import { HttpApiServer } from './server/http-api.js';
+import { McpHttpServer } from './server/mcp-http.js';
 import { HealthServer } from './health/index.js';
 import { AuthManager } from './auth/index.js';
 import { NotebookLMClient } from './notebook/index.js';
@@ -12,11 +11,14 @@ import { createLogger } from './utils/logger.js';
 const logger = createLogger('main');
 
 /**
- * Main entry point
+ * Main entry point for NotebookLM MCP Server
+ *
+ * This server implements the MCP (Model Context Protocol) over HTTP
+ * with streaming support for modern AI agent platforms like n8n, Claude Code, and others.
  */
 async function main(): Promise<void> {
   try {
-    logger.info('Starting NotebookLM MCP Server...');
+    logger.info('Starting NotebookLM MCP Server (HTTP Transport)...');
 
     // Validate environment
     validateEnvironment();
@@ -30,7 +32,7 @@ async function main(): Promise<void> {
       notebookId: config.notebookId,
       model: config.model,
       port: config.port,
-      httpApiEnabled: process.env.ENABLE_HTTP_API !== 'false',
+      apiKeyEnabled: !!process.env.API_KEY,
     });
 
     // Initialize components
@@ -38,32 +40,35 @@ async function main(): Promise<void> {
     const client = new NotebookLMClient(auth, config);
     const tools = new NotebookLMTools(client);
 
-    // Start health server
+    // Start health server (port 3000 by default)
     const healthServer = new HealthServer(config, auth, client);
     await healthServer.start();
 
-    // Start HTTP API server (for remote access)
-    let httpApiServer: HttpApiServer | null = null;
-    if (process.env.ENABLE_HTTP_API !== 'false') {
-      httpApiServer = new HttpApiServer(tools, config);
-      const httpPort = process.env.HTTP_API_PORT ? parseInt(process.env.HTTP_API_PORT) : config.port + 100;
-      await httpApiServer.start(httpPort);
-    }
+    // Start MCP HTTP server with SSE support (port 3000 by default, or specified port)
+    const mcpPort = process.env.MCP_PORT ? parseInt(process.env.MCP_PORT) : config.port;
+    const mcpServer = new McpHttpServer(tools, config);
+    await mcpServer.start(mcpPort);
 
-    // Create and start MCP server (stdio)
-    const mcpServer = new NotebookLMMCPServer(config);
-    await mcpServer.start();
+    logger.info('NotebookLM MCP Server started successfully', {
+      transport: 'HTTP with SSE',
+      mcpPort,
+      healthPort: config.port,
+      endpoints: {
+        mcp: `http://0.0.0.0:${mcpPort}/mcp`,
+        sse: `http://0.0.0.0:${mcpPort}/sse`,
+        tools: `http://0.0.0.0:${mcpPort}/mcp/tools`,
+        health: `http://0.0.0.0:${config.port}/health`,
+      },
+      authentication: !!process.env.API_KEY,
+      tools: tools.getToolDefinitions().map((t) => t.name),
+    });
 
     // Setup graceful shutdown
     const shutdown = async (signal: string): Promise<void> => {
       logger.info(`Received ${signal}, shutting down gracefully...`);
 
       try {
-        const shutdownPromises = [mcpServer.stop(), healthServer.stop()];
-        if (httpApiServer) {
-          shutdownPromises.push(httpApiServer.stop());
-        }
-        await Promise.all(shutdownPromises);
+        await Promise.all([mcpServer.stop(), healthServer.stop()]);
         logger.info('Shutdown complete');
         process.exit(0);
       } catch (error) {
