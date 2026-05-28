@@ -264,12 +264,13 @@ Question: ${question}`,
   /**
    * Get notebook metadata
    */
-  async getNotebookMetadata(): Promise<NotebookMetadata> {
-    const endpoint = `${this.baseUrl}/notebooks/${this.config.notebookId}`;
+  async getNotebookMetadata(notebookId?: string): Promise<NotebookMetadata> {
+    const targetNotebookId = notebookId || this.config.notebookId;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}`;
     const accessToken = await this.auth.getAccessToken();
 
     logger.debug('Fetching notebook metadata', {
-      notebookId: this.config.notebookId,
+      notebookId: targetNotebookId,
     });
 
     const response = await fetch(endpoint, {
@@ -289,10 +290,354 @@ Question: ${question}`,
     const data = (await response.json()) as NotebookMetadataResponse;
 
     return {
-      id: data.name?.split('/').pop() || this.config.notebookId,
+      id: data.name?.split('/').pop() || targetNotebookId,
       title: data.title || 'Unknown',
       createTime: data.createTime || '',
       updateTime: data.updateTime || '',
+    };
+  }
+
+  /**
+   * List sources in a notebook
+   */
+  async listSources(
+    notebookId?: string,
+    pageSize?: number,
+    pageToken?: string
+  ): Promise<{
+    sources: Array<{
+      id: string;
+      name: string;
+      type: string;
+      uri?: string;
+      size?: number;
+      createTime: string;
+      updateTime: string;
+      status?: string;
+    }>;
+    next_page_token?: string;
+    total_count?: number;
+  }> {
+    const targetNotebookId = notebookId || this.config.notebookId;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources`;
+    const accessToken = await this.auth.getAccessToken();
+
+    const params = new URLSearchParams();
+    if (pageSize) params.append('pageSize', pageSize.toString());
+    if (pageToken) params.append('pageToken', pageToken);
+
+    logger.debug('Listing notebook sources', {
+      notebookId: targetNotebookId,
+      pageSize,
+      pageToken,
+    });
+
+    const response = await fetch(`${endpoint}?${params}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to list sources: ${response.status} - ${errorText}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as any;
+
+    return {
+      sources: (data.sources || []).map((source: any) => ({
+        id: source.name?.split('/').pop() || source.id || 'unknown',
+        name: source.displayName || source.title || 'Unnamed Source',
+        type: source.type || 'OTHER',
+        uri: source.uri || source.url,
+        size: source.sizeBytes,
+        createTime: source.createTime || new Date().toISOString(),
+        updateTime: source.updateTime || new Date().toISOString(),
+        status: source.state || 'COMPLETED',
+      })),
+      next_page_token: data.nextPageToken,
+      total_count: data.totalSize,
+    };
+  }
+
+  /**
+   * Add a source to a notebook
+   */
+  async addSource(params: {
+    notebook_id?: string;
+    type: string;
+    content?: string;
+    uri?: string;
+    name: string;
+    metadata?: Record<string, string>;
+  }): Promise<{
+    source_id: string;
+    status: string;
+    message: string;
+  }> {
+    const targetNotebookId = params.notebook_id || this.config.notebookId;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources`;
+    const accessToken = await this.auth.getAccessToken();
+
+    logger.info('Adding source to notebook', {
+      notebookId: targetNotebookId,
+      type: params.type,
+      name: params.name,
+    });
+
+    // Build the request body based on source type
+    const requestBody: Record<string, unknown> = {
+      displayName: params.name,
+    };
+
+    switch (params.type) {
+      case 'TEXT':
+      case 'MARKDOWN':
+        if (!params.content) {
+          throw new Error('content is required for TEXT/MARKDOWN sources');
+        }
+        requestBody.inlineSource = {
+          mimeType: params.type === 'MARKDOWN' ? 'text/markdown' : 'text/plain',
+          content: params.content,
+        };
+        break;
+
+      case 'URL':
+      case 'YOUTUBE':
+        if (!params.content) {
+          throw new Error('content (URL) is required for URL/YOUTUBE sources');
+        }
+        requestBody.webSource = {
+          url: params.content,
+        };
+        break;
+
+      case 'PDF':
+      case 'AUDIO':
+        if (!params.uri) {
+          throw new Error('uri is required for PDF/AUDIO sources');
+        }
+        requestBody.gcsSource = {
+          uri: params.uri,
+        };
+        break;
+
+      case 'GOOGLE_DOC':
+        if (!params.uri) {
+          throw new Error('uri is required for GOOGLE_DOC sources');
+        }
+        requestBody.documentSource = {
+          documentId: params.uri,
+          documentType: 'GOOGLE_DOCS',
+        };
+        break;
+
+      default:
+        throw new Error(`Unsupported source type: ${params.type}`);
+    }
+
+    if (params.metadata) {
+      requestBody.metadata = params.metadata;
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to add source: ${response.status} - ${errorText}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as any;
+
+    return {
+      source_id: data.name?.split('/').pop() || 'unknown',
+      status: data.state || 'PROCESSING',
+      message: `Source "${params.name}" added successfully`,
+    };
+  }
+
+  /**
+   * Remove a source from a notebook
+   */
+  async removeSource(
+    notebookId: string | undefined,
+    sourceId: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    const targetNotebookId = notebookId || this.config.notebookId;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources/${sourceId}`;
+    const accessToken = await this.auth.getAccessToken();
+
+    logger.info('Removing source from notebook', {
+      notebookId: targetNotebookId,
+      sourceId,
+    });
+
+    const response = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to remove source: ${response.status} - ${errorText}`);
+    }
+
+    return {
+      success: true,
+      message: `Source ${sourceId} removed successfully`,
+    };
+  }
+
+  /**
+   * Update notebook metadata
+   */
+  async updateNotebook(params: {
+    notebook_id?: string;
+    title?: string;
+    description?: string;
+  }): Promise<{
+    success: boolean;
+    updated_fields: string[];
+    message: string;
+  }> {
+    const targetNotebookId = params.notebook_id || this.config.notebookId;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}`;
+    const accessToken = await this.auth.getAccessToken();
+
+    const updateMask: string[] = [];
+    const requestBody: Record<string, unknown> = {};
+
+    if (params.title) {
+      requestBody.title = params.title;
+      updateMask.push('title');
+    }
+
+    if (params.description) {
+      requestBody.description = params.description;
+      updateMask.push('description');
+    }
+
+    if (updateMask.length === 0) {
+      return {
+        success: true,
+        updated_fields: [],
+        message: 'No fields to update',
+      };
+    }
+
+    logger.info('Updating notebook metadata', {
+      notebookId: targetNotebookId,
+      fields: updateMask,
+    });
+
+    const response = await fetch(`${endpoint}?updateMask=${updateMask.join(',')}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to update notebook: ${response.status} - ${errorText}`);
+    }
+
+    return {
+      success: true,
+      updated_fields: updateMask,
+      message: `Notebook updated successfully: ${updateMask.join(', ')}`,
+    };
+  }
+
+  /**
+   * Search within notebook sources
+   */
+  async searchInSources(params: {
+    notebook_id?: string;
+    query: string;
+    source_ids?: string[];
+    max_results?: number;
+  }): Promise<{
+    results: Array<{
+      source_id: string;
+      source_name: string;
+      excerpt: string;
+      relevance_score?: number;
+      page_number?: number;
+    }>;
+    total_matches: number;
+    query: string;
+  }> {
+    const targetNotebookId = params.notebook_id || this.config.notebookId;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources:search`;
+    const accessToken = await this.auth.getAccessToken();
+
+    logger.info('Searching in notebook sources', {
+      notebookId: targetNotebookId,
+      query: params.query,
+      maxResults: params.max_results,
+    });
+
+    const requestBody = {
+      query: params.query,
+      sourceIds: params.source_ids,
+      pageSize: params.max_results || 10,
+    };
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to search sources: ${response.status} - ${errorText}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as any;
+
+    const results = (data.results || []).map((result: any) => ({
+      source_id: result.sourceId || 'unknown',
+      source_name: result.sourceName || 'Unknown Source',
+      excerpt: result.snippet || result.text || '',
+      relevance_score: result.score,
+      page_number: result.pageNumber,
+    }));
+
+    return {
+      results,
+      total_matches: data.totalSize || results.length,
+      query: params.query,
     };
   }
 
