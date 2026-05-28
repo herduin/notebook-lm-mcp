@@ -80,3 +80,27 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+      - name: Trigger Portainer redeploy webhook
+        # Solo en push al branch por defecto (master). Evita disparar en PRs,
+        # tags ad-hoc, develop o workflow_dispatch. Configurar el secret en
+        # Settings -> Secrets and variables -> Actions -> PORTAINER_WEBHOOK_URL
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          PORTAINER_WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_URL }}
+        run: |
+          if [ -z "$PORTAINER_WEBHOOK_URL" ]; then
+            echo "::warning::PORTAINER_WEBHOOK_URL no configurado; se omite redeploy."
+            exit 0
+          fi
+          echo "Disparando webhook de Portainer..."
+          HTTP_CODE=$(curl -sS -o /tmp/portainer-resp -w '%{http_code}' \
+            -X POST "$PORTAINER_WEBHOOK_URL" \
+            --max-time 30 --retry 3 --retry-delay 5 --retry-connrefused)
+          echo "HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Portainer webhook respondió $HTTP_CODE"
+            head -c 500 /tmp/portainer-resp || true
+            exit 1
+          fi
+          echo "Redeploy disparado OK."
