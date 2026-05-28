@@ -43,8 +43,16 @@ export interface AskNotebookOutput {
 export interface NotebookMetadata {
   id: string;
   title: string;
+  emoji?: string;
   createTime: string;
   updateTime: string;
+  sourceCount?: number;
+  sourcesSummary?: Array<{
+    id: string;
+    title: string;
+    type: string;
+    status?: string;
+  }>;
 }
 
 export interface RetryOptions {

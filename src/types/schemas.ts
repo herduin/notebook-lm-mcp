@@ -86,11 +86,21 @@ export const GetNotebookMetadataInputSchema = z.object({
 export const NotebookMetadataSchema = z.object({
   id: z.string().describe('Unique identifier of the notebook'),
   title: z.string().describe('Title/name of the notebook'),
-  description: z.string().optional().describe('Description of the notebook contents'),
+  emoji: z.string().optional().describe('Emoji icon of the notebook (if set)'),
   createTime: z.string().describe('ISO 8601 timestamp when the notebook was created'),
   updateTime: z.string().describe('ISO 8601 timestamp when the notebook was last updated'),
-  sourceCount: z.number().optional().describe('Number of sources/documents in the notebook'),
-  owner: z.string().optional().describe('Owner of the notebook'),
+  sourceCount: z.number().optional().describe('Number of sources in the notebook'),
+  sourcesSummary: z
+    .array(
+      z.object({
+        id: z.string(),
+        title: z.string(),
+        type: z.string(),
+        status: z.string().optional(),
+      })
+    )
+    .optional()
+    .describe('Compact summary of every source (id, title, inferred type, status)'),
 });
 
 export const GetNotebookMetadataOutputSchema = NotebookMetadataSchema;
@@ -233,11 +243,11 @@ export const SearchInSourcesInputSchema = z.object({
     .string()
     .min(1)
     .max(500)
-    .describe('Search query to find in sources (1-500 characters)'),
+    .describe('Search query (1-500 characters). Matching is case-insensitive substring.'),
   source_ids: z
     .array(z.string())
     .optional()
-    .describe('Optional array of specific source IDs to search in. Searches all sources if not provided.'),
+    .describe('Optional array of specific source IDs to restrict the search.'),
   max_results: z
     .number()
     .int()
@@ -246,20 +256,29 @@ export const SearchInSourcesInputSchema = z.object({
     .default(10)
     .optional()
     .describe('Maximum number of results to return (1-50, default: 10)'),
+  mode: z
+    .enum(['metadata', 'fulltext'])
+    .default('metadata')
+    .optional()
+    .describe(
+      "'metadata' (default) busca sobre title/sourceId/documentId/status. " +
+        "'fulltext' no esta soportado: la API publica de NotebookLM no expone " +
+        'busqueda full-text en el contenido y se devolvera un error honesto.'
+    ),
 });
 
 export const SearchResultSchema = z.object({
   source_id: z.string().describe('ID of the source containing the match'),
   source_name: z.string().describe('Name of the source document'),
-  excerpt: z.string().describe('Text excerpt containing the match with context'),
-  relevance_score: z.number().optional().describe('Relevance score (0-1) if available'),
-  page_number: z.number().optional().describe('Page number if applicable'),
+  excerpt: z.string().describe('Snippet of the metadata fields where the match occurred'),
+  relevance_score: z.number().optional().describe('Relevance score (0-1)'),
 });
 
 export const SearchInSourcesOutputSchema = z.object({
   results: z.array(SearchResultSchema).describe('Array of search results'),
   total_matches: z.number().describe('Total number of matches found'),
   query: z.string().describe('The search query that was executed'),
+  mode: z.literal('metadata').describe('Search mode used (only metadata is supported)'),
 });
 
 // ==================== Health & System Schemas ====================

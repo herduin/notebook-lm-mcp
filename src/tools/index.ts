@@ -10,8 +10,6 @@ import {
   AddSourceOutputSchema,
   RemoveSourceInputSchema,
   RemoveSourceOutputSchema,
-  UpdateNotebookInputSchema,
-  UpdateNotebookOutputSchema,
   SearchInSourcesInputSchema,
   SearchInSourcesOutputSchema,
 } from '../types/schemas.js';
@@ -44,23 +42,17 @@ export class NotebookLMTools {
     return [
       {
         name: 'ask_notebook',
-        description: `Ask a question to the NotebookLM notebook and receive a grounded answer based exclusively on the notebook contents.
+        description: `**NOT IMPLEMENTED** — Ask a question to the NotebookLM notebook.
 
-**Purpose**: Query the notebook's knowledge base to get accurate, cited answers.
+**Status**: Devuelve siempre un error explicativo. La API publica NotebookLM Enterprise (Discovery Engine v1alpha) no expone hoy un endpoint documentado para hacer preguntas al chat del notebook; los unicos metodos disponibles son administrativos (notebooks.create/get/share/batchDelete y sources:batchCreate/batchDelete/get/uploadFile).
 
-**Key Features**:
-- Answers are grounded in notebook sources only
-- Includes citations with exact text references
-- Cached for improved performance on repeated questions
-- Security: Automatic prompt injection protection
+**Por que no implementamos un workaround con Gemini**: llamar a Gemini pasandole solo el NOTEBOOK_ID como string no consulta el notebook (Gemini no tiene acceso a el), genera respuestas inventadas que parecen citadas. Para no engañar al cliente preferimos fallar con un mensaje claro.
 
-**Use Cases**:
-- Research queries about notebook content
-- Fact-checking against notebook sources
-- Extracting specific information with citations
-- Content summarization
+**Alternativas**:
+- Usar la UI oficial en notebooklm.cloud.google.com.
+- Implementar un RAG propio: indexar las sources con embeddings y consultar Gemini con fragmentos reales (requiere infra adicional).
 
-**Response includes**: answer text, source list, detailed citations, processing time, and cache status.`,
+**Tools disponibles que SI funcionan**: get_notebook_metadata, list_sources, add_source, remove_source.`,
         inputSchema: AskNotebookInputSchema,
       },
       {
@@ -87,133 +79,80 @@ export class NotebookLMTools {
       },
       {
         name: 'list_sources',
-        description: `List all sources (documents, URLs, files) contained in a notebook with pagination support.
+        description: `List the sources contained in a notebook with client-side pagination.
 
-**Purpose**: Enumerate and inspect all sources that form the notebook's knowledge base.
+**API origen**: Las sources NO tienen un endpoint dedicado en NotebookLM Enterprise; vienen embebidas en el response de notebooks.get. Esta tool hace GET del notebook y expone el array de sources con un slice por page_token (indice numerico).
 
-**Returns for each source**:
-- Source ID and name
-- Type (PDF, TEXT, URL, MARKDOWN, GOOGLE_DOC, YOUTUBE, AUDIO, etc.)
-- URI/URL if applicable
-- File size
-- Creation and update timestamps
-- Processing status
+**Returns para cada source**:
+- id, name, type (inferido del shape del metadata)
+- uri (documentId de Drive o url web)
+- size (wordCount aproximado)
+- createTime / updateTime
+- status normalizado a {PROCESSING, COMPLETED, FAILED}
 
-**Pagination**:
-- Configurable page size (1-100 items, default: 50)
-- Use next_page_token to retrieve subsequent pages
-- Total count provided when available
+**Paginacion**:
+- page_size (1-100). El total real viene en total_count.
+- page_token = indice numerico (string) para el siguiente slice. Undefined si no hay mas.
 
 **Use Cases**:
-- Audit notebook contents
-- Find specific sources
-- Monitor source processing status
-- Export source inventory
-- Content management workflows`,
+- Auditar el inventario de sources
+- Recuperar ids para remove_source
+- Validar que add_source completo`,
         inputSchema: ListSourcesInputSchema,
       },
       {
         name: 'add_source',
-        description: `Add a new source (document, URL, text content) to a notebook.
+        description: `Add a new source to a notebook via sources:batchCreate.
 
-**Purpose**: Expand the notebook's knowledge base by adding new sources.
+**Tipos soportados** (mapeo a UserContent del API):
+- **TEXT** / **MARKDOWN** -> textContent (sourceName + content)
+- **URL** -> webContent (url + sourceName). La pagina la fetchea Google en backend.
+- **YOUTUBE** -> videoContent (youtubeUrl)
+- **GOOGLE_DOC** -> googleDriveContent (documentId + mimeType=application/vnd.google-apps.document)
 
-**Supported Source Types**:
-- **PDF**: PDF documents (provide uri to file)
-- **TEXT**: Plain text content (provide content)
-- **URL**: Web pages (provide content with URL)
-- **MARKDOWN**: Markdown formatted text (provide content)
-- **GOOGLE_DOC**: Google Docs (provide uri)
-- **YOUTUBE**: YouTube videos (provide content with URL)
-- **AUDIO**: Audio files (provide uri)
+**No soportados todavia**: PDF y AUDIO requieren sources:uploadFile (multipart) que no esta implementado en este server. Subi esos archivos desde la UI.
 
-**Parameters**:
-- type: Type of source (required)
-- name: Display name for the source (required)
-- content: Text content or URL (required for TEXT/MARKDOWN/URL/YOUTUBE)
-- uri: File path or URL (required for PDF/GOOGLE_DOC/AUDIO)
-- metadata: Optional key-value pairs for additional info
+**Parametros**:
+- type: uno de TEXT/MARKDOWN/URL/YOUTUBE/GOOGLE_DOC (requerido)
+- name: display name de la source (requerido)
+- content: texto plano para TEXT/MARKDOWN, URL para URL/YOUTUBE
+- uri: documentId de Google Drive para GOOGLE_DOC
+- notebook_id: opcional, default = NOTEBOOK_ID env
 
-**Processing**:
-- Sources are processed asynchronously
-- Initial status returned immediately
-- Use list_sources to check processing completion
-
-**Use Cases**:
-- Add research papers or documentation
-- Import web content
-- Add transcripts or notes
-- Integrate external knowledge sources`,
+**Asincrono**: el API responde inmediatamente con la source en estado PROCESSING. Usa list_sources para ver cuando llega a COMPLETED.`,
         inputSchema: AddSourceInputSchema,
       },
       {
         name: 'remove_source',
-        description: `Remove a source from a notebook.
+        description: `Remove a source from a notebook via sources:batchDelete.
 
-**Purpose**: Delete sources that are no longer needed or were added incorrectly.
+**Parametros**:
+- source_id: id corto (uuid) o resource name completo (projects/.../sources/{id}). Si llega corto, se compone el name con la config del server.
+- notebook_id: opcional, default = NOTEBOOK_ID env
 
-**Parameters**:
-- notebook_id: Target notebook (optional, uses default if not provided)
-- source_id: ID of the source to remove (required)
+**Importante**: operacion permanente, no se puede deshacer.
 
-**Important**: This operation is permanent and cannot be undone.
-
-**Use Cases**:
-- Remove outdated content
-- Delete duplicate sources
-- Clean up test data
-- Manage notebook size
-
-**Returns**: Success status and confirmation message.`,
+**Returns**: success boolean y mensaje. Usar list_sources para confirmar.`,
         inputSchema: RemoveSourceInputSchema,
       },
       {
-        name: 'update_notebook',
-        description: `Update notebook metadata such as title and description.
-
-**Purpose**: Modify notebook properties for better organization and documentation.
-
-**Updatable Fields**:
-- title: Notebook display name (1-500 characters)
-- description: Detailed description of contents (max 5000 characters)
-
-**Parameters**: All fields are optional. Provide only the fields you want to update.
-
-**Use Cases**:
-- Rename notebooks for clarity
-- Add or update descriptions
-- Organize notebook collections
-- Document notebook purpose
-
-**Returns**: Success status, list of updated fields, and confirmation message.`,
-        inputSchema: UpdateNotebookInputSchema,
-      },
-      {
         name: 'search_in_sources',
-        description: `Search for specific text or keywords within notebook sources.
+        description: `Search across the metadata of the notebook sources (NOT full-text).
 
-**Purpose**: Find specific content, quotes, or information across all or specific sources.
+**Alcance honesto**: la API publica de NotebookLM Enterprise no expone busqueda full-text sobre el contenido de las sources. Esta tool solo hace match case-insensitive sobre los campos disponibles en notebooks.get:
+- title
+- sourceId.id
+- name (resource name completo)
+- metadata.googleDocsMetadata.documentId
+- settings.status
 
-**Search Capabilities**:
-- Full-text search across all sources
-- Optional filtering by specific source IDs
-- Configurable result limit (1-50, default: 10)
-- Results include context excerpts
+**Parametros**:
+- query: substring a buscar (case-insensitive)
+- source_ids: opcional, restringe a esas sources
+- max_results: limite de resultados (1-50, default 10)
+- mode: 'metadata' (default) o 'fulltext'. Con 'fulltext' devuelve error honesto.
 
-**Returns for each match**:
-- Source ID and name
-- Text excerpt with surrounding context
-- Relevance score (if available)
-- Page number (if applicable)
-
-**Use Cases**:
-- Find specific quotes or references
-- Locate information across multiple documents
-- Verify facts or data points
-- Content discovery
-- Research and citation finding
-
-**Note**: Results are ranked by relevance. Use max_results to control response size.`,
+**Use cases**: encontrar una source por nombre parcial, listar las que estan en estado FAILED, ubicar el id de una source para remove_source.`,
         inputSchema: SearchInSourcesInputSchema,
       },
     ];
@@ -349,26 +288,6 @@ export class NotebookLMTools {
   }
 
   /**
-   * Handle update_notebook tool call
-   */
-  async handleUpdateNotebook(input: unknown): Promise<unknown> {
-    const requestId = `tool_update_notebook_${Date.now()}`;
-    logger.info('Handling update_notebook tool call', { requestId });
-
-    try {
-      const validated = UpdateNotebookInputSchema.parse(input);
-      const result = await this.client.updateNotebook(validated);
-      return UpdateNotebookOutputSchema.parse(result);
-    } catch (error) {
-      logger.error('update_notebook tool failed', {
-        requestId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-      throw error;
-    }
-  }
-
-  /**
    * Handle search_in_sources tool call
    */
   async handleSearchInSources(input: unknown): Promise<unknown> {
@@ -403,8 +322,6 @@ export class NotebookLMTools {
         return this.handleAddSource(input);
       case 'remove_source':
         return this.handleRemoveSource(input);
-      case 'update_notebook':
-        return this.handleUpdateNotebook(input);
       case 'search_in_sources':
         return this.handleSearchInSources(input);
       default:

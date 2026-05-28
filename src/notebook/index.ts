@@ -1,5 +1,5 @@
 import { AuthManager } from '../auth/index.js';
-import { Config, AskNotebookOutput, Citation, NotebookMetadata } from '../types/index.js';
+import { Config, AskNotebookOutput, NotebookMetadata } from '../types/index.js';
 import { createLogger } from '../utils/logger.js';
 import { retryWithBackoff } from '../utils/retry.js';
 import { Cache } from '../cache/index.js';
@@ -44,234 +44,39 @@ export class NotebookLMClient {
   }
 
   /**
-   * Ask a question to the notebook with grounded generation
-   */
-  async askQuestion(question: string, skipCache = false): Promise<AskNotebookOutput> {
-    const startTime = Date.now();
-    const requestId = `ask_${Date.now()}`;
-
-    logger.info('Processing question', {
-      requestId,
-      questionLength: question.length,
-      skipCache,
-    });
-
-    // Check cache first
-    if (!skipCache) {
-      const cacheKey = Cache.generateKey(this.config.notebookId, question);
-      const cached = this.cache.get(cacheKey);
-
-      if (cached) {
-        logger.info('Returning cached response', { requestId, cacheKey });
-        return {
-          ...cached,
-          cached: true,
-          latency_ms: Date.now() - startTime,
-        };
-      }
-    }
-
-    try {
-      // Call Vertex AI with grounded generation
-      const response = await this.callVertexAI(question, requestId);
-
-      // Cache the response
-      if (!skipCache) {
-        const cacheKey = Cache.generateKey(this.config.notebookId, question);
-        this.cache.set(cacheKey, response);
-      }
-
-      const latency = Date.now() - startTime;
-      logger.info('Question processed successfully', {
-        requestId,
-        latency_ms: latency,
-        answerLength: response.answer.length,
-        citationsCount: response.citations.length,
-      });
-
-      return {
-        ...response,
-        latency_ms: latency,
-        cached: false,
-      };
-    } catch (error) {
-      const latency = Date.now() - startTime;
-      logger.error('Failed to process question', {
-        requestId,
-        latency_ms: latency,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Call Vertex AI with grounded generation using NotebookLM
+   * Ask a question to the notebook.
    *
-   * Note: This uses Vertex AI Gemini with a grounding approach since direct
-   * NotebookLM query endpoints are not yet publicly available in v1alpha.
+   * IMPORTANTE: la API publica de NotebookLM Enterprise (Discovery Engine
+   * v1alpha) NO expone hoy un endpoint para hacer preguntas al chat del
+   * notebook. Los unicos metodos disponibles para 'notebooks' son
+   * create/get/listRecentlyViewed/share/batchDelete y los de 'sources'.
+   *
+   * Cualquier respuesta que generaramos llamando a Gemini con solo el
+   * notebookId como string seria inventada (Gemini no tiene acceso al
+   * contenido del notebook). Por eso esta funcion lanza un error claro en
+   * vez de pretender una respuesta groundeada. Si en el futuro se
+   * implementa un RAG real (descarga + indexado + Gemini con contexto),
+   * este metodo es el lugar.
    */
-  private async callVertexAI(question: string, requestId: string): Promise<AskNotebookOutput> {
-    const aiHost =
-      this.config.googleRegion === 'global'
-        ? 'aiplatform.googleapis.com'
-        : `${this.config.googleRegion}-aiplatform.googleapis.com`;
-    const endpoint = `https://${aiHost}/v1/projects/${this.config.googleProjectId}/locations/${this.config.googleRegion}/publishers/google/models/${this.config.model}:generateContent`;
-
-    const accessToken = await retryWithBackoff(
-      () => this.auth.getAccessToken(),
-      {
-        maxRetries: this.config.maxRetries,
-        delayMs: this.config.retryDelayMs,
-      },
-      'get-access-token'
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async askQuestion(_question: string, _skipCache = false): Promise<AskNotebookOutput> {
+    const err = new Error(
+      'ask_notebook no esta disponible: la API NotebookLM Enterprise no expone ' +
+        'un endpoint publico documentado para consultar el chat del notebook. ' +
+        'Este servidor puede administrar notebooks y fuentes (list_sources, ' +
+        'add_source, remove_source, get_notebook_metadata) pero no responder ' +
+        'preguntas groundeadas contra el contenido. Usa la UI de NotebookLM ' +
+        '(notebooklm.cloud.google.com) o implementa un RAG propio.'
     );
-
-    // Build the request with notebook context
-    const requestBody = {
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: `You are an assistant that answers questions based ONLY on the contents of NotebookLM notebook ID: ${this.config.notebookId}.
-
-Important guidelines:
-- Answer ONLY based on information from the notebook
-- Always cite your sources
-- If the information is not in the notebook, say so
-- Be concise and accurate
-
-Question: ${question}`,
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        topP: 0.8,
-        topK: 40,
-        maxOutputTokens: 2048,
-      },
-      safetySettings: [
-        {
-          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-        },
-        {
-          category: 'HARM_CATEGORY_HATE_SPEECH',
-          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-        },
-        {
-          category: 'HARM_CATEGORY_HARASSMENT',
-          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-        },
-        {
-          category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-        },
-      ],
-    };
-
-    logger.debug('Calling Vertex AI', {
-      requestId,
-      endpoint,
-      model: this.config.model,
-    });
-
-    const response = await retryWithBackoff(
-      async () => {
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(this.config.requestTimeoutMs),
-        });
-
-        if (!res.ok) {
-          const errorText = await res.text();
-          throw new Error(`Vertex AI API error: ${res.status} - ${errorText}`);
-        }
-
-        return res.json();
-      },
-      {
-        maxRetries: this.config.maxRetries,
-        delayMs: this.config.retryDelayMs,
-      },
-      'vertex-ai-call'
-    );
-
-    // Parse response
-    return this.parseVertexAIResponse(response, requestId);
+    logger.warn('ask_notebook invoked but not implementable via public API');
+    throw err;
   }
 
   /**
-   * Parse Vertex AI response
-   */
-  private parseVertexAIResponse(response: unknown, requestId: string): AskNotebookOutput {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data = response as any;
-
-    if (!data.candidates || data.candidates.length === 0) {
-      throw new Error('No candidates in response');
-    }
-
-    const candidate = data.candidates[0];
-    const content = candidate.content;
-
-    if (!content || !content.parts || content.parts.length === 0) {
-      throw new Error('No content parts in response');
-    }
-
-    const answer = content.parts[0].text;
-    const citations: Citation[] = [];
-    const sources: string[] = [];
-
-    // Extract citations if available
-    if (candidate.citationMetadata && candidate.citationMetadata.citations) {
-      for (const citation of candidate.citationMetadata.citations) {
-        const citationObj: Citation = {
-          source: citation.uri || 'NotebookLM',
-          text: answer.substring(citation.startIndex, citation.endIndex),
-          title: citation.title,
-        };
-        citations.push(citationObj);
-
-        if (citation.uri && !sources.includes(citation.uri)) {
-          sources.push(citation.uri);
-        }
-      }
-    }
-
-    // Add notebook reference
-    if (sources.length === 0) {
-      sources.push(`notebook://${this.config.notebookId}`);
-    }
-
-    logger.debug('Response parsed', {
-      requestId,
-      answerLength: answer.length,
-      citationsCount: citations.length,
-      sourcesCount: sources.length,
-    });
-
-    return {
-      answer,
-      sources,
-      citations,
-      latency_ms: 0, // Will be set by caller
-      notebook_id: this.config.notebookId,
-      model: this.config.model,
-      cached: false,
-    };
-  }
-
-  /**
-   * Get notebook metadata
+   * Get notebook metadata via notebooks.get.
+   * Devuelve titulo, emoji, timestamps y un resumen compacto de las sources
+   * (id, title, tipo inferido, status). Las sources detalladas se obtienen
+   * con list_sources.
    */
   async getNotebookMetadata(notebookId?: string): Promise<NotebookMetadata> {
     const targetNotebookId = notebookId || this.config.notebookId;
@@ -296,13 +101,147 @@ Question: ${question}`,
       throw new Error(`Failed to get notebook metadata: ${response.status} - ${errorText}`);
     }
 
-    const data = (await response.json()) as NotebookMetadataResponse;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sources: any[] = Array.isArray(data.sources) ? data.sources : [];
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inferType = (s: any): string => {
+      const m = s.metadata || {};
+      if (m.googleDocsMetadata) return 'GOOGLE_DOC';
+      if (m.youtubeMetadata) return 'YOUTUBE';
+      if (m.webMetadata || m.urlMetadata) return 'URL';
+      if (m.pdfMetadata) return 'PDF';
+      if (m.audioMetadata) return 'AUDIO';
+      if (m.textMetadata) return 'TEXT';
+      return s.type || 'OTHER';
+    };
 
     return {
-      id: data.name?.split('/').pop() || targetNotebookId,
-      title: data.title || 'Unknown',
-      createTime: data.createTime || '',
-      updateTime: data.updateTime || '',
+      id: (data as NotebookMetadataResponse).name?.split('/').pop() || targetNotebookId,
+      title: (data as NotebookMetadataResponse).title || 'Unknown',
+      emoji: data.emoji || data.notebookEmoji,
+      createTime: (data as NotebookMetadataResponse).createTime || '',
+      updateTime: (data as NotebookMetadataResponse).updateTime || '',
+      sourceCount: sources.length,
+      sourcesSummary: sources.map((s) => ({
+        id: s.sourceId?.id || s.name?.split('/').pop() || 'unknown',
+        title: s.title || 'Untitled',
+        type: inferType(s),
+        status: s.settings?.status,
+      })),
+    };
+  }
+
+  /**
+   * Search within notebook sources (metadata-only).
+   *
+   * IMPORTANTE: la API publica de NotebookLM no expone busqueda full-text en
+   * el contenido de las sources. Esta implementacion hace busqueda
+   * case-insensitive sobre los campos disponibles en notebooks.get:
+   *   title, sourceId.id, name, metadata.googleDocsMetadata.documentId,
+   *   settings.status.
+   * Si el cliente pide busqueda full-text (mode='fulltext'), lanza error
+   * honesto.
+   */
+  async searchInSources(params: {
+    notebook_id?: string;
+    query: string;
+    source_ids?: string[];
+    max_results?: number;
+    mode?: 'metadata' | 'fulltext';
+  }): Promise<{
+    results: Array<{
+      source_id: string;
+      source_name: string;
+      excerpt: string;
+      relevance_score?: number;
+    }>;
+    total_matches: number;
+    query: string;
+    mode: 'metadata';
+  }> {
+    if (params.mode === 'fulltext') {
+      throw new Error(
+        'NotebookLM Enterprise API no expone endpoint publico documentado ' +
+          'para busqueda full-text en fuentes. Se requiere RAG propio o ' +
+          'lectura directa de los documentos fuente.'
+      );
+    }
+
+    const targetNotebookId = params.notebook_id || this.config.notebookId;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}`;
+    const accessToken = await this.auth.getAccessToken();
+
+    logger.info('Searching in notebook sources (metadata-only)', {
+      notebookId: targetNotebookId,
+      query: params.query,
+      max_results: params.max_results,
+    });
+
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to load notebook for search: ${response.status} - ${errorText}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let sources: any[] = Array.isArray(data.sources) ? data.sources : [];
+
+    if (params.source_ids && params.source_ids.length > 0) {
+      const filter = new Set(params.source_ids);
+      sources = sources.filter((s) => filter.has(s.sourceId?.id));
+    }
+
+    const q = params.query.toLowerCase();
+    type Hit = {
+      source_id: string;
+      source_name: string;
+      excerpt: string;
+      relevance_score: number;
+    };
+    const hits: Hit[] = [];
+    for (const s of sources) {
+      const title: string = s.title || '';
+      const id: string = s.sourceId?.id || '';
+      const fullName: string = s.name || '';
+      const docId: string = s.metadata?.googleDocsMetadata?.documentId || '';
+      const status: string = s.settings?.status || '';
+
+      const matches: string[] = [];
+      if (title.toLowerCase().includes(q)) matches.push(`title:"${title}"`);
+      if (id.toLowerCase().includes(q)) matches.push(`sourceId:${id}`);
+      if (fullName.toLowerCase().includes(q)) matches.push(`name:${fullName}`);
+      if (docId.toLowerCase().includes(q)) matches.push(`documentId:${docId}`);
+      if (status.toLowerCase().includes(q)) matches.push(`status:${status}`);
+
+      if (matches.length > 0) {
+        hits.push({
+          source_id: id || fullName.split('/').pop() || 'unknown',
+          source_name: title || 'Untitled',
+          excerpt: matches.join(' | '),
+          relevance_score: matches.length / 5,
+        });
+      }
+    }
+
+    const limit = params.max_results && params.max_results > 0 ? params.max_results : 10;
+    return {
+      results: hits.slice(0, limit),
+      total_matches: hits.length,
+      query: params.query,
+      mode: 'metadata',
     };
   }
 
@@ -428,7 +367,10 @@ Question: ${question}`,
     message: string;
   }> {
     const targetNotebookId = params.notebook_id || this.config.notebookId;
-    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources`;
+    // Endpoint oficial: sources:batchCreate
+    // POST .../notebooks/{id}/sources:batchCreate
+    // body: { userContents: [ { <oneOf textContent|webContent|videoContent|googleDriveContent> } ] }
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources:batchCreate`;
     const accessToken = await this.auth.getAccessToken();
 
     logger.info('Adding source to notebook', {
@@ -437,10 +379,8 @@ Question: ${question}`,
       name: params.name,
     });
 
-    // Build the request body based on source type
-    const requestBody: Record<string, unknown> = {
-      displayName: params.name,
-    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const userContent: Record<string, any> = {};
 
     switch (params.type) {
       case 'TEXT':
@@ -448,48 +388,54 @@ Question: ${question}`,
         if (!params.content) {
           throw new Error('content is required for TEXT/MARKDOWN sources');
         }
-        requestBody.inlineSource = {
-          mimeType: params.type === 'MARKDOWN' ? 'text/markdown' : 'text/plain',
+        userContent.textContent = {
+          sourceName: params.name,
           content: params.content,
         };
         break;
 
       case 'URL':
-      case 'YOUTUBE':
-        if (!params.content) {
-          throw new Error('content (URL) is required for URL/YOUTUBE sources');
+        if (!params.content && !params.uri) {
+          throw new Error('content (URL) is required for URL sources');
         }
-        requestBody.webSource = {
-          url: params.content,
+        userContent.webContent = {
+          url: params.content || params.uri,
+          sourceName: params.name,
         };
         break;
+
+      case 'YOUTUBE':
+        if (!params.content && !params.uri) {
+          throw new Error('content (YouTube URL) is required for YOUTUBE sources');
+        }
+        userContent.videoContent = {
+          youtubeUrl: params.content || params.uri,
+        };
+        break;
+
+      case 'GOOGLE_DOC': {
+        const docId = params.uri || params.content;
+        if (!docId) {
+          throw new Error('uri (Google Drive documentId) is required for GOOGLE_DOC sources');
+        }
+        userContent.googleDriveContent = {
+          documentId: docId,
+          mimeType: 'application/vnd.google-apps.document',
+          sourceName: params.name,
+        };
+        break;
+      }
 
       case 'PDF':
       case 'AUDIO':
-        if (!params.uri) {
-          throw new Error('uri is required for PDF/AUDIO sources');
-        }
-        requestBody.gcsSource = {
-          uri: params.uri,
-        };
-        break;
-
-      case 'GOOGLE_DOC':
-        if (!params.uri) {
-          throw new Error('uri is required for GOOGLE_DOC sources');
-        }
-        requestBody.documentSource = {
-          documentId: params.uri,
-          documentType: 'GOOGLE_DOCS',
-        };
-        break;
+        // El batchCreate no soporta binarios; eso requiere sources:uploadFile
+        // (multipart media upload) que aun no esta implementado en este server.
+        throw new Error(
+          `Tipo "${params.type}" requiere sources:uploadFile (binarios), todavia no implementado. Subelo desde la UI o usa GOOGLE_DOC/TEXT/URL.`
+        );
 
       default:
         throw new Error(`Unsupported source type: ${params.type}`);
-    }
-
-    if (params.metadata) {
-      requestBody.metadata = params.metadata;
     }
 
     const response = await fetch(endpoint, {
@@ -498,7 +444,7 @@ Question: ${question}`,
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ userContents: [userContent] }),
       signal: AbortSignal.timeout(this.config.requestTimeoutMs),
     });
 
@@ -509,16 +455,26 @@ Question: ${question}`,
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data = (await response.json()) as any;
+    // batchCreate puede devolver un Operation (long-running) o el resultado
+    // directamente con { sources: [...] }. Cubrimos ambos casos.
+    const firstSource =
+      data?.sources?.[0] ||
+      data?.response?.sources?.[0] ||
+      data?.metadata?.sources?.[0] ||
+      {};
+    const sourceId =
+      firstSource.sourceId?.id || firstSource.name?.split('/').pop() || 'pending';
 
     return {
-      source_id: data.name?.split('/').pop() || 'unknown',
-      status: data.state || 'PROCESSING',
-      message: `Source "${params.name}" added successfully`,
+      source_id: sourceId,
+      status: firstSource.settings?.status?.includes('FAIL') ? 'FAILED' : 'PROCESSING',
+      message: `Source "${params.name}" submitted to notebook ${targetNotebookId}`,
     };
   }
 
   /**
-   * Remove a source from a notebook
+   * Remove a source from a notebook using the official sources:batchDelete
+   * endpoint. Espera el `name` completo del recurso de cada source.
    */
   async removeSource(
     notebookId: string | undefined,
@@ -528,8 +484,13 @@ Question: ${question}`,
     message: string;
   }> {
     const targetNotebookId = notebookId || this.config.notebookId;
-    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources/${sourceId}`;
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources:batchDelete`;
     const accessToken = await this.auth.getAccessToken();
+
+    // sourceId puede llegar como UUID corto o como full resource name.
+    const fullName = sourceId.startsWith('projects/')
+      ? sourceId
+      : `projects/${this.config.googleProjectNumber}/locations/${this.config.googleRegion}/notebooks/${targetNotebookId}/sources/${sourceId}`;
 
     logger.info('Removing source from notebook', {
       notebookId: targetNotebookId,
@@ -537,11 +498,12 @@ Question: ${question}`,
     });
 
     const response = await fetch(endpoint, {
-      method: 'DELETE',
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ names: [fullName] }),
       signal: AbortSignal.timeout(this.config.requestTimeoutMs),
     });
 
@@ -553,138 +515,6 @@ Question: ${question}`,
     return {
       success: true,
       message: `Source ${sourceId} removed successfully`,
-    };
-  }
-
-  /**
-   * Update notebook metadata
-   */
-  async updateNotebook(params: {
-    notebook_id?: string;
-    title?: string;
-    description?: string;
-  }): Promise<{
-    success: boolean;
-    updated_fields: string[];
-    message: string;
-  }> {
-    const targetNotebookId = params.notebook_id || this.config.notebookId;
-    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}`;
-    const accessToken = await this.auth.getAccessToken();
-
-    const updateMask: string[] = [];
-    const requestBody: Record<string, unknown> = {};
-
-    if (params.title) {
-      requestBody.title = params.title;
-      updateMask.push('title');
-    }
-
-    if (params.description) {
-      requestBody.description = params.description;
-      updateMask.push('description');
-    }
-
-    if (updateMask.length === 0) {
-      return {
-        success: true,
-        updated_fields: [],
-        message: 'No fields to update',
-      };
-    }
-
-    logger.info('Updating notebook metadata', {
-      notebookId: targetNotebookId,
-      fields: updateMask,
-    });
-
-    const response = await fetch(`${endpoint}?updateMask=${updateMask.join(',')}`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to update notebook: ${response.status} - ${errorText}`);
-    }
-
-    return {
-      success: true,
-      updated_fields: updateMask,
-      message: `Notebook updated successfully: ${updateMask.join(', ')}`,
-    };
-  }
-
-  /**
-   * Search within notebook sources
-   */
-  async searchInSources(params: {
-    notebook_id?: string;
-    query: string;
-    source_ids?: string[];
-    max_results?: number;
-  }): Promise<{
-    results: Array<{
-      source_id: string;
-      source_name: string;
-      excerpt: string;
-      relevance_score?: number;
-      page_number?: number;
-    }>;
-    total_matches: number;
-    query: string;
-  }> {
-    const targetNotebookId = params.notebook_id || this.config.notebookId;
-    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources:search`;
-    const accessToken = await this.auth.getAccessToken();
-
-    logger.info('Searching in notebook sources', {
-      notebookId: targetNotebookId,
-      query: params.query,
-      maxResults: params.max_results,
-    });
-
-    const requestBody = {
-      query: params.query,
-      sourceIds: params.source_ids,
-      pageSize: params.max_results || 10,
-    };
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to search sources: ${response.status} - ${errorText}`);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data = (await response.json()) as any;
-
-    const results = (data.results || []).map((result: any) => ({
-      source_id: result.sourceId || 'unknown',
-      source_name: result.sourceName || 'Unknown Source',
-      excerpt: result.snippet || result.text || '',
-      relevance_score: result.score,
-      page_number: result.pageNumber,
-    }));
-
-    return {
-      results,
-      total_matches: data.totalSize || results.length,
-      query: params.query,
     };
   }
 
