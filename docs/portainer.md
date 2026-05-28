@@ -64,7 +64,12 @@ LOG_LEVEL=info
 
 [`../portainer-stack.yml`](../portainer-stack.yml) solo tiene sentido si necesitas adaptar la gestión de credenciales o la definición de recursos. Para la mayoría de despliegues, el stack simple es suficiente.
 
+## Redeploy automático desde GitHub Actions
+
+El stack puede recrearse solo cada vez que GitHub Actions publica una imagen nueva, usando un webhook de Portainer y el secret `PORTAINER_WEBHOOK_URL` del repo. Ver [GitHub Actions → Redeploy automático en Portainer](github-actions.md#redeploy-automático-en-portainer) para los pasos de configuración.
+
 ## Relacionado
 
 - [Docker](docker.md)
 - [Acceso remoto](remote-access.md)
+- [GitHub Actions](github-actions.md)
