@@ -93,6 +93,10 @@ jobs:
             echo "::warning::PORTAINER_WEBHOOK_URL no configurado; se omite redeploy."
             exit 0
           fi
+          # Pequeña espera para que GHCR propague el tag :latest antes de
+          # que Portainer haga 'docker pull' al recibir el webhook.
+          echo "Esperando 5s a que GHCR propague la imagen..."
+          sleep 5
           echo "Disparando webhook de Portainer..."
           HTTP_CODE=$(curl -sS -o /tmp/portainer-resp -w '%{http_code}' \
             -X POST "$PORTAINER_WEBHOOK_URL" \
