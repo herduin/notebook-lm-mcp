@@ -10,15 +10,19 @@ import {
   JSONRPCResponse,
 } from '@modelcontextprotocol/sdk/types.js';
 import { NotebookLMTools } from '../tools/index.js';
-import { Config } from '../types/index.js';
+import { Config, HealthStatus, ReadinessStatus } from '../types/index.js';
 import { createLogger } from '../utils/logger.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { AuthManager } from '../auth/index.js';
+import { NotebookLMClient } from '../notebook/index.js';
+import packageJson from '../../package.json' with { type: 'json' };
 
 const logger = createLogger('mcp-http');
 
 /**
  * HTTP-based MCP Server with SSE support for n8n and other MCP clients
  * Implements the MCP protocol over HTTP with streaming capabilities
+ * Includes health and readiness endpoints on the same port
  */
 export class McpHttpServer {
   private app: FastifyInstance;
@@ -26,11 +30,17 @@ export class McpHttpServer {
   private tools: NotebookLMTools;
   private config: Config;
   private apiKey: string | undefined;
+  private auth: AuthManager;
+  private client: NotebookLMClient;
+  private startTime: number;
 
-  constructor(tools: NotebookLMTools, config: Config) {
+  constructor(tools: NotebookLMTools, config: Config, auth: AuthManager, client: NotebookLMClient) {
     this.tools = tools;
     this.config = config;
     this.apiKey = process.env.API_KEY;
+    this.auth = auth;
+    this.client = client;
+    this.startTime = Date.now();
 
     // Initialize Fastify
     this.app = Fastify({
@@ -182,22 +192,81 @@ export class McpHttpServer {
         version: '2.0.0',
         protocol: 'MCP over HTTP with SSE',
         transport: 'http',
+        status: 'ok',
         capabilities: {
           tools: true,
           streaming: true,
         },
-        endpoints: {
-          mcp: '/mcp',
-          sse: '/sse',
-          tools: 'GET /mcp/tools',
-          call: 'POST /mcp/call',
-        },
+        endpoints: [
+          'GET /',
+          'GET /health',
+          'GET /ready',
+          'GET /live',
+          'GET /mcp/tools',
+          'POST /mcp/call',
+          'POST /mcp',
+          'GET /sse',
+          'GET /api/tools (alias)',
+          'POST /api/ask (alias)',
+        ],
         authentication: {
           required: !!this.apiKey,
           method: 'X-API-Key header (case-insensitive)',
         },
         documentation: 'https://github.com/herduin/notebook-lm-mcp',
       });
+    });
+
+    // Health endpoint (no auth required)
+    this.app.get('/health', async (_request: FastifyRequest, reply: FastifyReply) => {
+      const health: HealthStatus = {
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: Math.floor((Date.now() - this.startTime) / 1000),
+        version: packageJson.version || '1.0.0',
+      };
+
+      return reply.code(200).send(health);
+    });
+
+    // Readiness endpoint (no auth required, but validates auth and notebook)
+    this.app.get('/ready', async (_request: FastifyRequest, reply: FastifyReply) => {
+      let authCheck = false;
+      let notebookCheck = false;
+
+      try {
+        authCheck = await this.auth.verify();
+      } catch (error) {
+        logger.warn('Auth check failed during readiness', {
+          error: error instanceof Error ? error.message : 'Unknown',
+        });
+      }
+
+      try {
+        notebookCheck = await this.client.verifyNotebook();
+      } catch (error) {
+        logger.warn('Notebook check failed during readiness', {
+          error: error instanceof Error ? error.message : 'Unknown',
+        });
+      }
+
+      const ready = authCheck && notebookCheck;
+      const status: ReadinessStatus = {
+        ready,
+        checks: {
+          auth: authCheck,
+          notebook: notebookCheck,
+        },
+        timestamp: new Date().toISOString(),
+      };
+
+      const statusCode = ready ? 200 : 503;
+      return reply.code(statusCode).send(status);
+    });
+
+    // Liveness endpoint (no auth required)
+    this.app.get('/live', async (_request: FastifyRequest, reply: FastifyReply) => {
+      return reply.code(200).send({ status: 'alive' });
     });
 
     // MCP JSON-RPC endpoint
@@ -289,6 +358,48 @@ export class McpHttpServer {
       } catch (error) {
         logger.error('Direct MCP tool call failed', {
           tool: body.tool,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+
+        return reply.code(500).send({
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    // REST API compatibility aliases
+    // GET /api/tools - alias for /mcp/tools
+    this.app.get('/api/tools', async (_request: FastifyRequest, reply: FastifyReply) => {
+      const toolDefinitions = this.tools.getToolDefinitions();
+      const tools = toolDefinitions.map((def) => ({
+        name: def.name,
+        description: def.description,
+        inputSchema: zodToJsonSchema(def.inputSchema),
+      }));
+
+      return reply.send({ tools });
+    });
+
+    // POST /api/ask - simplified alias that calls ask_notebook tool
+    this.app.post('/api/ask', async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = request.body as { question: string };
+
+      try {
+        if (!body.question) {
+          return reply.code(400).send({
+            error: 'Missing required field: question',
+          });
+        }
+
+        logger.info('REST API ask endpoint called', {
+          questionLength: body.question.length,
+        });
+
+        const result = await this.tools.handleToolCall('ask_notebook', { question: body.question });
+
+        return reply.send(result);
+      } catch (error) {
+        logger.error('REST API ask failed', {
           error: error instanceof Error ? error.message : 'Unknown error',
         });
 
