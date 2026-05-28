@@ -65,9 +65,7 @@ export class McpHttpServer {
       }
     );
 
-    this.setupMiddleware();
     this.setupMcpHandlers();
-    this.setupRoutes();
 
     logger.info('McpHttpServer initialized');
   }
@@ -462,6 +460,9 @@ export class McpHttpServer {
     const listenPort = port || this.config.port;
 
     try {
+      await this.setupMiddleware();
+      this.setupRoutes();
+
       await this.app.listen({
         port: listenPort,
         host: '0.0.0.0',
