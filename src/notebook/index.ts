@@ -184,7 +184,7 @@ Question: ${question}`,
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${accessToken}`,
+            Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(requestBody),
@@ -285,7 +285,7 @@ Question: ${question}`,
     const response = await fetch(endpoint, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       signal: AbortSignal.timeout(this.config.requestTimeoutMs),
@@ -484,7 +484,7 @@ Question: ${question}`,
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
@@ -528,7 +528,7 @@ Question: ${question}`,
     const response = await fetch(endpoint, {
       method: 'DELETE',
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       signal: AbortSignal.timeout(this.config.requestTimeoutMs),
@@ -590,7 +590,7 @@ Question: ${question}`,
     const response = await fetch(`${endpoint}?updateMask=${updateMask.join(',')}`, {
       method: 'PATCH',
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
@@ -647,7 +647,7 @@ Question: ${question}`,
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
