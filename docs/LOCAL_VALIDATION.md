@@ -274,6 +274,6 @@ See `docs/DOCKER_BUILD.md` for details on ARM64 support.
 After successful local validation:
 1. Tag the image for your registry
 2. Push to registry
-3. Deploy to production using Portainer (see `docs/PORTAINER.md`)
+3. Deploy to production using Portainer (see `docs/portainer.md`)
 4. Configure Cloudflare Tunnel to point to `http://localhost:3210`
 5. Test through public domain

@@ -56,4 +56,4 @@ Security: `src/utils/security.ts` — `sanitizeInput` and `validateQuestion` (pr
 - All logging goes through `createLogger(scope)` from `src/utils/logger.ts` (pino under the hood) — no `console.*` in `src/` except the fatal-error fallback in `src/index.ts`.
 - Tool input/output contracts live in `src/types/schemas.ts` (zod). Add a tool by: schema → method on `NotebookLMClient` → entry in `NotebookLMTools.getToolDefinitions()` and its `executeTool` switch → unit test.
 - Coverage gate is 70% (not the global 80% from `~/.claude/rules`). Match repo, not global, when touching `jest.config.js`.
-- Docker image published to `ghcr.io/herduin/notebook-lm-mcp:latest`. `docker-compose.yml` and the two `portainer-stack*.yml` files are the deployment manifests; `docs/PORTAINER.md` / `docs/portainer.md` / `docs/DOCKER_BUILD.md` / `docs/LOCAL_VALIDATION.md` cover ops detail.
+- Docker image published to `ghcr.io/herduin/notebook-lm-mcp:latest`. `docker-compose.yml` and the two `portainer-stack*.yml` files are the deployment manifests; `docs/portainer.md` / `docs/DOCKER_BUILD.md` / `docs/LOCAL_VALIDATION.md` cover ops detail.
