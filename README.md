@@ -1,337 +1,86 @@
 # NotebookLM MCP Server
 
-Production-ready MCP (Model Context Protocol) server for Google NotebookLM Enterprise API. This server enables AI agents like Claude, Paperclip, and other MCP clients to perform grounded question-answering against specific NotebookLM notebooks.
+Servidor MCP para consultar un notebook de Google NotebookLM Enterprise con respuestas fundamentadas y citas.
 
-## Features
+## Qué incluye
 
-- ✅ **Official Google Cloud APIs**: Uses Vertex AI and NotebookLM Enterprise APIs
-- ✅ **MCP Protocol**: Full Model Context Protocol support
-- ✅ **Grounded Answers**: Responses based exclusively on notebook content with citations
-- ✅ **Production Ready**: Enterprise-grade architecture with proper error handling
-- ✅ **Caching**: Configurable TTL cache for improved performance
-- ✅ **Retry Logic**: Exponential backoff with configurable retries
-- ✅ **Security**: Input validation, sanitization, and prompt injection protection
-- ✅ **Observability**: Structured logging with Pino, request IDs, and metrics
-- ✅ **Health Checks**: Kubernetes-ready health and readiness endpoints
-- ✅ **Docker Support**: Optimized multi-stage builds with security hardening
-- ✅ **Type Safety**: Full TypeScript with strict mode
-- ✅ **Testing**: Comprehensive unit and integration tests
+- **MCP por stdio** para clientes como Claude Desktop
+- **HTTP API opcional** para integraciones remotas
+- **Endpoints de salud** en el puerto `3000`
+- **Soporte Docker** con imagen publicada en GitHub Container Registry
 
-## Architecture
+## Requisitos
 
-```
-src/
-├── config/          # Configuration management and validation
-├── types/           # TypeScript types and Zod schemas
-├── auth/            # Google Cloud authentication
-├── utils/           # Logger, retry logic, security utilities
-├── cache/           # TTL-based caching layer
-├── notebook/        # NotebookLM client implementation
-├── tools/           # MCP tool definitions and handlers
-├── server/          # MCP server implementation
-├── health/          # Health check endpoints (Fastify)
-└── index.ts         # Main entry point
-```
+- Node.js 22+
+- Un proyecto de Google Cloud con NotebookLM Enterprise habilitado
+- Un service account con acceso al notebook
+- El `NOTEBOOK_ID` del notebook que vas a consultar
 
-## Prerequisites
+## Inicio rápido local
 
-- **Node.js**: v22.0.0 or higher
-- **Google Cloud Project**: With NotebookLM Enterprise enabled
-- **Service Account**: With appropriate IAM permissions
-- **NotebookLM Notebook**: Created via Enterprise API or UI
+1. Instala dependencias:
+   ```bash
+   npm ci
+   ```
+2. Crea tu archivo de entorno:
+   ```bash
+   cp .env.example .env
+   ```
+3. Completa como mínimo estas variables:
+   - `GOOGLE_PROJECT_ID`
+   - `GOOGLE_PROJECT_NUMBER`
+   - `GOOGLE_REGION`
+   - `GOOGLE_APPLICATION_CREDENTIALS`
+   - `NOTEBOOK_ID`
+4. Compila el proyecto:
+   ```bash
+   npm run build
+   ```
+5. Inícialo:
+   ```bash
+   npm start
+   ```
 
-## Installation
+## Docker
 
-### 1. Clone the Repository
+Imagen publicada:
 
-```bash
-git clone https://github.com/herduin/notebook-lm-mcp.git
-cd notebook-lm-mcp
-```
+- **Imagen:** `ghcr.io/herduin/notebook-lm-mcp:latest`
+- **Paquete:** https://github.com/herduin/notebook-lm-mcp/pkgs/container/notebook-lm-mcp
 
-### 2. Install Dependencies
+Guía recomendada: [docs/docker.md](docs/docker.md)
 
-```bash
-npm install
-```
+Resumen rápido:
 
-### 3. Build the Project
+- `3000`: salud, readiness, liveness y cache
+- `3100`: HTTP API opcional (`/api/ask`, `/api/tools`, `/mcp/call`, `/mcp/tools`)
+
+## Documentación
+
+- [Docker](docs/docker.md)
+- [Portainer](docs/portainer.md)
+- [Clientes MCP](docs/mcp-clients.md)
+- [Acceso remoto](docs/remote-access.md)
+- [GitHub Actions y publicación de imagen](docs/github-actions.md)
+- [Problemas conocidos](docs/known-issues.md)
+
+## Archivos útiles del repositorio
+
+- [`Dockerfile`](Dockerfile)
+- [`docker-compose.yml`](docker-compose.yml)
+- [`portainer-stack-simple.yml`](portainer-stack-simple.yml)
+- [`portainer-stack.yml`](portainer-stack.yml)
+- [`.env.example`](.env.example)
+- [`.env.docker`](.env.docker)
+
+## Comandos de desarrollo
 
 ```bash
 npm run build
+npm run test
+npm run lint
 ```
 
-## Google Cloud Setup
-
-### 1. Enable Required APIs
-
-```bash
-gcloud services enable aiplatform.googleapis.com
-gcloud services enable discoveryengine.googleapis.com
-```
-
-### 2. Create Service Account
-
-```bash
-# Create service account
-gcloud iam service-accounts create notebooklm-mcp \
-  --display-name="NotebookLM MCP Server" \
-  --description="Service account for NotebookLM MCP Server"
-
-# Get your project ID
-export PROJECT_ID=$(gcloud config get-value project)
-export SA_EMAIL="notebooklm-mcp@${PROJECT_ID}.iam.gserviceaccount.com"
-```
-
-### 3. Grant IAM Permissions
-
-```bash
-# Required roles for NotebookLM and Vertex AI
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/aiplatform.user"
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/discoveryengine.admin"
-```
-
-### 4. Create and Download Service Account Key
-
-```bash
-gcloud iam service-accounts keys create service-account-key.json \
-  --iam-account="${SA_EMAIL}"
-
-# Keep this file secure!
-chmod 600 service-account-key.json
-```
-
-### 5. Get Your Project Number
-
-```bash
-gcloud projects describe $PROJECT_ID --format="value(projectNumber)"
-```
-
-## Configuration
-
-### Environment Variables
-
-Create a `.env` file from the template:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your values:
-
-```bash
-# Google Cloud Configuration (REQUIRED)
-GOOGLE_PROJECT_ID=your-project-id
-GOOGLE_PROJECT_NUMBER=123456789
-GOOGLE_REGION=us-central1
-GOOGLE_APPLICATION_CREDENTIALS=./service-account-key.json
-
-# NotebookLM Configuration (REQUIRED)
-NOTEBOOK_ID=your-notebook-id
-
-# Model Configuration
-MODEL=gemini-1.5-pro-002
-
-# Server Configuration
-PORT=3000
-NODE_ENV=production
-
-# Cache Configuration (seconds)
-CACHE_TTL=300
-
-# Retry Configuration
-MAX_RETRIES=3
-RETRY_DELAY_MS=1000
-
-# Timeout Configuration (milliseconds)
-REQUEST_TIMEOUT_MS=30000
-
-# Security Configuration
-MAX_QUESTION_LENGTH=4000
-
-# Logging Configuration
-LOG_LEVEL=info
-```
-
-### Getting Your Notebook ID
-
-#### Option 1: Create via API
-
-```bash
-export ACCESS_TOKEN=$(gcloud auth print-access-token)
-export PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
-export REGION="us-central1"
-
-curl -X POST \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  "https://${REGION}-discoveryengine.googleapis.com/v1alpha/projects/${PROJECT_NUMBER}/locations/${REGION}/notebooks" \
-  -d '{
-    "title": "My MCP Notebook"
-  }'
-```
-
-The response will contain the notebook ID.
-
-#### Option 2: List Existing Notebooks
-
-```bash
-curl -X GET \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  "https://${REGION}-discoveryengine.googleapis.com/v1alpha/projects/${PROJECT_NUMBER}/locations/${REGION}/notebooks"
-```
-
-## Running the Server
-
-### Development Mode
-
-```bash
-npm run dev
-```
-
-### Production Mode
-
-```bash
-npm start
-```
-
-### Using Docker
-
-#### Option 1: Pre-built Image from GitHub Container Registry (Recommended)
-
-```bash
-# Pull the latest image
-docker pull ghcr.io/herduin/notebook-lm-mcp:latest
-
-# Run the container
-docker run -d \
-  --name notebooklm-mcp \
-  -p 3000:3000 \
-  -p 3100:3100 \
-  -v $(pwd)/service-account-key.json:/credentials/key.json:ro \
-  -e GOOGLE_PROJECT_ID=your-project-id \
-  -e GOOGLE_PROJECT_NUMBER=123456789 \
-  -e GOOGLE_REGION=us-central1 \
-  -e NOTEBOOK_ID=your-notebook-id \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/credentials/key.json \
-  ghcr.io/herduin/notebook-lm-mcp:latest
-```
-
-#### Option 2: Build Locally
-
-```bash
-# Build the image
-docker build -t notebooklm-mcp-server .
-
-# Run with docker-compose
-cp .env.docker .env
-docker-compose up -d
-```
-
-**See [DOCKER_IMAGE_GUIDE.md](DOCKER_IMAGE_GUIDE.md) for complete Docker usage guide.**
-
-### Using Portainer
-
-Deploy with Portainer for easy management:
-
-```bash
-# 1. Copy the stack file
-cp portainer-stack-simple.yml my-stack.yml
-
-# 2. In Portainer UI:
-#    - Go to Stacks > Add Stack
-#    - Name: notebooklm-mcp
-#    - Paste stack content
-#    - Add environment variables
-#    - Deploy
-
-# See PORTAINER_GUIDE.md for detailed instructions
-```
-
-**Quick Portainer Setup:**
-1. Place service account key at `/opt/notebooklm/service-account-key.json` on Docker host
-2. In Portainer, create stack with `portainer-stack-simple.yml`
-3. Add required environment variables (see PORTAINER_GUIDE.md)
-4. Deploy and monitor via Portainer UI
-
-For complete Portainer deployment guide, see [PORTAINER_GUIDE.md](PORTAINER_GUIDE.md)
-
-## MCP Client Configuration
-
-### Claude Desktop
-
-Add to your Claude Desktop configuration file:
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "notebooklm": {
-      "command": "node",
-      "args": ["/absolute/path/to/notebook-lm-mcp/dist/index.js"],
-      "env": {
-        "GOOGLE_PROJECT_ID": "your-project-id",
-        "GOOGLE_PROJECT_NUMBER": "123456789",
-        "GOOGLE_REGION": "us-central1",
-        "NOTEBOOK_ID": "your-notebook-id",
-        "GOOGLE_APPLICATION_CREDENTIALS": "/absolute/path/to/service-account-key.json",
-        "MODEL": "gemini-1.5-pro-002",
-        "PORT": "3000",
-        "LOG_LEVEL": "info"
-      }
-    }
-  }
-}
-```
-
-## Usage
-
-Use the `ask_notebook` tool in your MCP client:
-
-```json
-{
-  "name": "ask_notebook",
-  "arguments": {
-    "question": "What are the key findings in the Q4 report?"
-  }
-}
-```
-
-## API Endpoints
-
-```bash
-# Health Check
-curl http://localhost:3000/health
-
-# Readiness Check
-curl http://localhost:3000/ready
-
-# Cache Statistics
-curl http://localhost:3000/stats/cache
-
-# Clear Cache
-curl -X POST http://localhost:3000/cache/clear
-```
-
-## Testing
-
-```bash
-npm test              # Run all tests
-npm run test:unit     # Unit tests only
-npm run test:coverage # Coverage report
-```
-
-## Troubleshooting
-
-See the full documentation for common issues and solutions.
-
-## License
+## Licencia
 
 MIT
