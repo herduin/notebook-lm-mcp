@@ -42,17 +42,22 @@ export class NotebookLMTools {
     return [
       {
         name: 'ask_notebook',
-        description: `**NOT IMPLEMENTED** — Ask a question to the NotebookLM notebook.
+        description: `Ask a question to the notebook content using a RAG pipeline that we run ourselves (la API publica de NotebookLM no expone chat).
 
-**Status**: Devuelve siempre un error explicativo. La API publica NotebookLM Enterprise (Discovery Engine v1alpha) no expone hoy un endpoint documentado para hacer preguntas al chat del notebook; los unicos metodos disponibles son administrativos (notebooks.create/get/share/batchDelete y sources:batchCreate/batchDelete/get/uploadFile).
+**Como funciona**:
+1. notebooks.get para listar las sources del notebook.
+2. Para cada source tipo GOOGLE_DOC, se baja el texto via Google Docs API usando el service account del server.
+3. El texto real se le pasa a Gemini junto con la pregunta y reglas de citation.
+4. La respuesta cita por id de source (ej. [FUENTE 2]) y la lista 'sources' del response incluye los resource names reales usados.
 
-**Por que no implementamos un workaround con Gemini**: llamar a Gemini pasandole solo el NOTEBOOK_ID como string no consulta el notebook (Gemini no tiene acceso a el), genera respuestas inventadas que parecen citadas. Para no engañar al cliente preferimos fallar con un mensaje claro.
+**Limitaciones**:
+- Solo se indexan sources tipo GOOGLE_DOC. URL, YOUTUBE, PDF, AUDIO y TEXT inline NO se incluyen en el contexto (aparecen anotadas en sources[] como __not_indexed__).
+- El service account necesita acceso a cada Google Doc (compartido como Viewer, o Domain-Wide Delegation). Si no lo tiene, ese doc se omite y aparece en sources[] como __skipped__ con el error real.
+- Si ningun doc se pudo leer, la tool falla con instrucciones para compartir los Docs con el SA.
 
-**Alternativas**:
-- Usar la UI oficial en notebooklm.cloud.google.com.
-- Implementar un RAG propio: indexar las sources con embeddings y consultar Gemini con fragmentos reales (requiere infra adicional).
+**Cache**: respuestas se cachean por (notebookId, question) durante CACHE_TTL segundos (default 300).
 
-**Tools disponibles que SI funcionan**: get_notebook_metadata, list_sources, add_source, remove_source.`,
+**Returns**: answer (string), sources (resource names usados + __skipped__/__not_indexed__), citations (id+title por fuente), latency_ms, model, cached.`,
         inputSchema: AskNotebookInputSchema,
       },
       {

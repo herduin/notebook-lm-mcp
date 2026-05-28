@@ -16,7 +16,16 @@ export class AuthManager {
 
     const authOptions: GoogleAuthOptions = {
       keyFilename: config.googleApplicationCredentials,
-      scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+      // cloud-platform cubre Vertex AI / Discovery Engine.
+      // documents.readonly + drive.readonly habilitan el RAG sobre las
+      // fuentes Google Docs del notebook (ask_notebook). Si el SA no tiene
+      // permiso sobre un Doc concreto, igual va a fallar a nivel ACL del
+      // documento; los scopes solo declaran la intencion del cliente.
+      scopes: [
+        'https://www.googleapis.com/auth/cloud-platform',
+        'https://www.googleapis.com/auth/documents.readonly',
+        'https://www.googleapis.com/auth/drive.readonly',
+      ],
       projectId: config.googleProjectId,
     };
 

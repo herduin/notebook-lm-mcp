@@ -1,5 +1,5 @@
 import { AuthManager } from '../auth/index.js';
-import { Config, AskNotebookOutput, NotebookMetadata } from '../types/index.js';
+import { Config, AskNotebookOutput, Citation, NotebookMetadata } from '../types/index.js';
 import { createLogger } from '../utils/logger.js';
 import { retryWithBackoff } from '../utils/retry.js';
 import { Cache } from '../cache/index.js';
@@ -44,32 +44,254 @@ export class NotebookLMClient {
   }
 
   /**
-   * Ask a question to the notebook.
+   * Ask a question to the notebook using a real RAG pipeline.
    *
-   * IMPORTANTE: la API publica de NotebookLM Enterprise (Discovery Engine
-   * v1alpha) NO expone hoy un endpoint para hacer preguntas al chat del
-   * notebook. Los unicos metodos disponibles para 'notebooks' son
-   * create/get/listRecentlyViewed/share/batchDelete y los de 'sources'.
+   * Como la API publica NotebookLM no expone chat/query, montamos nuestra
+   * propia recuperacion: leemos sources del notebook via notebooks.get,
+   * bajamos el texto crudo de cada Google Doc usando Google Docs API, y
+   * armamos un prompt con esos fragmentos para Gemini. Citas son reales
+   * porque vienen del array sources del notebook (sourceId + title +
+   * documentId).
    *
-   * Cualquier respuesta que generaramos llamando a Gemini con solo el
-   * notebookId como string seria inventada (Gemini no tiene acceso al
-   * contenido del notebook). Por eso esta funcion lanza un error claro en
-   * vez de pretender una respuesta groundeada. Si en el futuro se
-   * implementa un RAG real (descarga + indexado + Gemini con contexto),
-   * este metodo es el lugar.
+   * Limitaciones:
+   * - Solo lee fuentes tipo GOOGLE_DOC (googleDocsMetadata.documentId).
+   *   Otros tipos (URL, YOUTUBE, PDF, AUDIO, TEXT inline) se omiten del
+   *   contexto pero se mencionan en sources[] del response para que el
+   *   cliente sepa que no fueron consultadas.
+   * - El SA necesita acceso al Doc (compartido o por Domain-Wide
+   *   Delegation). Si Docs API responde 403/404 para una source, se
+   *   omite del contexto y se anota en logs.
+   * - Cache por question hash, TTL = config.cacheTtl.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async askQuestion(_question: string, _skipCache = false): Promise<AskNotebookOutput> {
-    const err = new Error(
-      'ask_notebook no esta disponible: la API NotebookLM Enterprise no expone ' +
-        'un endpoint publico documentado para consultar el chat del notebook. ' +
-        'Este servidor puede administrar notebooks y fuentes (list_sources, ' +
-        'add_source, remove_source, get_notebook_metadata) pero no responder ' +
-        'preguntas groundeadas contra el contenido. Usa la UI de NotebookLM ' +
-        '(notebooklm.cloud.google.com) o implementa un RAG propio.'
-    );
-    logger.warn('ask_notebook invoked but not implementable via public API');
-    throw err;
+  async askQuestion(question: string, skipCache = false): Promise<AskNotebookOutput> {
+    const startTime = Date.now();
+    const requestId = `ask_${Date.now()}`;
+
+    logger.info('Processing question (RAG)', {
+      requestId,
+      questionLength: question.length,
+      skipCache,
+    });
+
+    if (!skipCache) {
+      const cacheKey = Cache.generateKey(this.config.notebookId, question);
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        logger.info('Returning cached RAG response', { requestId, cacheKey });
+        return { ...cached, cached: true, latency_ms: Date.now() - startTime };
+      }
+    }
+
+    try {
+      // 1. Obtener notebook + sources.
+      const accessToken = await this.auth.getAccessToken();
+      const notebookEndpoint = `${this.baseUrl}/notebooks/${this.config.notebookId}`;
+      const nbRes = await fetch(notebookEndpoint, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+      });
+      if (!nbRes.ok) {
+        const t = await nbRes.text();
+        throw new Error(`notebooks.get failed: ${nbRes.status} - ${t}`);
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const nbData = (await nbRes.json()) as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const allSources: any[] = Array.isArray(nbData.sources) ? nbData.sources : [];
+
+      // 2. Bajar contenido real de cada Google Doc en paralelo.
+      type Fragment = {
+        sourceId: string;
+        title: string;
+        documentId: string;
+        text: string;
+      };
+      const docSources = allSources.filter((s) => s.metadata?.googleDocsMetadata?.documentId);
+      const skipped: string[] = [];
+      const fragments = (
+        await Promise.all(
+          docSources.map(async (s) => {
+            const documentId: string = s.metadata.googleDocsMetadata.documentId;
+            const sourceId: string = s.sourceId?.id || s.name?.split('/').pop() || 'unknown';
+            const title: string = s.title || 'Untitled';
+            try {
+              const text = await this.fetchGoogleDocText(documentId, accessToken);
+              return { sourceId, title, documentId, text } as Fragment;
+            } catch (err) {
+              logger.warn('Could not fetch Google Doc content', {
+                requestId,
+                sourceId,
+                documentId,
+                error: err instanceof Error ? err.message : 'Unknown',
+              });
+              skipped.push(`${title} (${sourceId}): ${err instanceof Error ? err.message : 'unknown'}`);
+              return null;
+            }
+          })
+        )
+      ).filter((f): f is Fragment => f !== null);
+
+      // Otras sources (URL/YOUTUBE/etc) se mencionan pero no se cargan.
+      const nonDocSources = allSources.filter((s) => !s.metadata?.googleDocsMetadata?.documentId);
+
+      if (fragments.length === 0) {
+        throw new Error(
+          'No se pudo leer ninguna fuente Google Doc del notebook. ' +
+            (skipped.length > 0
+              ? `Errores: ${skipped.join('; ')}. `
+              : 'El notebook no tiene Google Docs accesibles para el service account. ') +
+            'Compartí cada Doc con el email del service account, o agregá Domain-Wide Delegation.'
+        );
+      }
+
+      // 3. Armar prompt con contenido real (truncado por seguridad: max
+      //    ~60k chars por doc para no reventar el context window).
+      const MAX_DOC_CHARS = 60000;
+      const docsBlock = fragments
+        .map(
+          (f, i) =>
+            `[FUENTE ${i + 1} | id=${f.sourceId} | title="${f.title}"]\n${f.text.slice(0, MAX_DOC_CHARS)}${
+              f.text.length > MAX_DOC_CHARS ? '\n...[truncado]' : ''
+            }`
+        )
+        .join('\n\n---\n\n');
+
+      const prompt = `Eres un asistente que responde preguntas EXCLUSIVAMENTE en base a las fuentes del notebook NotebookLM listadas abajo. Reglas estrictas:
+- No uses conocimiento externo. Si la respuesta no esta en las fuentes, di "no encontré esa información en el notebook".
+- Cita siempre la(s) fuente(s) usadas indicando el id entre corchetes, p.ej. [FUENTE 2].
+- Se conciso y factual.
+
+FUENTES DISPONIBLES:
+${docsBlock}
+
+PREGUNTA: ${question}`;
+
+      // 4. Llamar Gemini generateContent.
+      const aiHost =
+        this.config.googleRegion === 'global'
+          ? 'aiplatform.googleapis.com'
+          : `${this.config.googleRegion}-aiplatform.googleapis.com`;
+      const aiEndpoint = `https://${aiHost}/v1/projects/${this.config.googleProjectId}/locations/${this.config.googleRegion}/publishers/google/models/${this.config.model}:generateContent`;
+
+      const geminiBody = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2, topP: 0.8, maxOutputTokens: 2048 },
+      };
+
+      const aiRes = await retryWithBackoff(
+        async () => {
+          const r = await fetch(aiEndpoint, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(geminiBody),
+            signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+          });
+          if (!r.ok) throw new Error(`Vertex AI error: ${r.status} - ${await r.text()}`);
+          return r.json();
+        },
+        { maxRetries: this.config.maxRetries, delayMs: this.config.retryDelayMs },
+        'vertex-ai-rag'
+      );
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const aiData = aiRes as any;
+      const answer: string =
+        aiData?.candidates?.[0]?.content?.parts?.[0]?.text ||
+        'No se obtuvo respuesta del modelo.';
+
+      // 5. Construir citations reales en base a las fuentes que usamos.
+      const citations: Citation[] = fragments.map((f) => ({
+        source: `notebook://${this.config.notebookId}/sources/${f.sourceId}`,
+        text: f.title,
+        title: f.title,
+      }));
+      const sourcesList: string[] = [
+        ...fragments.map((f) => `notebook://${this.config.notebookId}/sources/${f.sourceId}`),
+      ];
+      if (skipped.length > 0) sourcesList.push(`__skipped__: ${skipped.join('; ')}`);
+      if (nonDocSources.length > 0)
+        sourcesList.push(
+          `__not_indexed__: ${nonDocSources.length} fuentes no-Doc (URL/YouTube/PDF/Audio) no se incluyeron en el contexto.`
+        );
+
+      const result: AskNotebookOutput = {
+        answer,
+        sources: sourcesList,
+        citations,
+        latency_ms: 0,
+        notebook_id: this.config.notebookId,
+        model: this.config.model,
+        cached: false,
+      };
+
+      if (!skipCache) {
+        const cacheKey = Cache.generateKey(this.config.notebookId, question);
+        this.cache.set(cacheKey, result);
+      }
+
+      const latency = Date.now() - startTime;
+      logger.info('RAG question processed', {
+        requestId,
+        latency_ms: latency,
+        fragments: fragments.length,
+        skipped: skipped.length,
+        answerLength: answer.length,
+      });
+
+      return { ...result, latency_ms: latency };
+    } catch (error) {
+      logger.error('RAG failed', {
+        requestId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch plain text from a Google Doc using the Docs API.
+   * Itera el structuralElement del body extrayendo textRun.content.
+   */
+  private async fetchGoogleDocText(documentId: string, accessToken: string): Promise<string> {
+    const url = `https://docs.googleapis.com/v1/documents/${documentId}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
+
+    if (!res.ok) {
+      const t = await res.text();
+      // Mensaje accionable: el caso comun es 403 (SA no compartido en el Doc).
+      throw new Error(`Docs API ${res.status} (${t.slice(0, 200)})`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (await res.json()) as any;
+    const parts: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const walk = (els: any[]): void => {
+      if (!Array.isArray(els)) return;
+      for (const el of els) {
+        if (el.paragraph?.elements) {
+          for (const pe of el.paragraph.elements) {
+            if (pe.textRun?.content) parts.push(pe.textRun.content as string);
+          }
+        }
+        if (el.table?.tableRows) {
+          for (const row of el.table.tableRows) {
+            for (const cell of row.tableCells || []) walk(cell.content || []);
+          }
+        }
+        if (el.tableOfContents?.content) walk(el.tableOfContents.content);
+      }
+    };
+    walk(doc?.body?.content || []);
+    return parts.join('').trim();
   }
 
   /**
