@@ -3,50 +3,18 @@ import { LogContext } from '../types/index.js';
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 
-/**
- * Create a Pino logger instance with structured logging
- */
-export function createLogger(component: string): pino.Logger {
-  const logger = pino({
-    level: process.env.LOG_LEVEL || 'info',
-    transport: isDevelopment
-      ? {
-          target: 'pino-pretty',
-          options: {
-            colorize: true,
-            translateTime: 'HH:MM:ss Z',
-            ignore: 'pid,hostname',
-          },
-        }
-      : undefined,
-    base: {
-      component,
-      env: process.env.NODE_ENV || 'production',
-    },
-    timestamp: pino.stdTimeFunctions.isoTime,
-    formatters: {
-      level: (label) => {
-        return { level: label };
-      },
-    },
-    redact: {
-      paths: [
-        'credentials',
-        'password',
-        'token',
-        'accessToken',
-        'access_token',
-        'authorization',
-        'secret',
-        'apiKey',
-        'api_key',
-      ],
-      remove: true,
-    },
-  });
+export interface AppLogger {
+  info(msg: string, obj?: Record<string, unknown>): void;
+  debug(msg: string, obj?: Record<string, unknown>): void;
+  warn(msg: string, obj?: Record<string, unknown>): void;
+  error(msg: string, obj?: Record<string, unknown>): void;
+  fatal(msg: string, obj?: Record<string, unknown>): void;
+  trace(msg: string, obj?: Record<string, unknown>): void;
+  child(bindings: pino.Bindings): AppLogger;
+}
 
-  // Wrap logger to fix TypeScript strict mode issues with Pino's overloads
-  const wrappedLogger = {
+function wrapLogger(logger: pino.Logger): AppLogger {
+  return {
     info: (msg: string, obj?: Record<string, unknown>) => {
       if (obj) {
         logger.info(obj, msg);
@@ -89,19 +57,62 @@ export function createLogger(component: string): pino.Logger {
         logger.trace(msg);
       }
     },
-    child: (bindings: pino.Bindings) => logger.child(bindings),
-  } as pino.Logger;
+    child: (bindings: pino.Bindings) => wrapLogger(logger.child(bindings)),
+  };
+}
 
-  return wrappedLogger;
+/**
+ * Create a Pino logger instance with structured logging
+ */
+export function createLogger(component: string): AppLogger {
+  const logger = pino({
+    level: process.env.LOG_LEVEL || 'info',
+    transport: isDevelopment
+      ? {
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'HH:MM:ss Z',
+            ignore: 'pid,hostname',
+          },
+        }
+      : undefined,
+    base: {
+      component,
+      env: process.env.NODE_ENV || 'production',
+    },
+    timestamp: pino.stdTimeFunctions.isoTime,
+    formatters: {
+      level: (label) => {
+        return { level: label };
+      },
+    },
+    redact: {
+      paths: [
+        'credentials',
+        'password',
+        'token',
+        'accessToken',
+        'access_token',
+        'authorization',
+        'secret',
+        'apiKey',
+        'api_key',
+      ],
+      remove: true,
+    },
+  });
+
+  return wrapLogger(logger);
 }
 
 /**
  * Create a child logger with additional context
  */
 export function createChildLogger(
-  parentLogger: pino.Logger,
+  parentLogger: AppLogger,
   context: LogContext
-): pino.Logger {
+): AppLogger {
   return parentLogger.child(context);
 }
 
