@@ -83,6 +83,10 @@ export class HttpApiServer {
             ask: 'POST /api/ask',
             tools: 'GET /api/tools',
           },
+          mcp: {
+            call: 'POST /mcp/call',
+            tools: 'GET|POST /mcp/tools',
+          },
         },
       });
     });
@@ -152,6 +156,12 @@ export class HttpApiServer {
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
+    });
+
+    // Support both GET and POST for /mcp/tools to allow browser access
+    this.app.get('/mcp/tools', async (_request, reply) => {
+      const tools = this.tools.getToolDefinitions();
+      return reply.send({ tools });
     });
 
     this.app.post('/mcp/tools', async (_request, reply) => {
