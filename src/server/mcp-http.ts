@@ -267,7 +267,7 @@ export class McpHttpServer {
       return reply.code(200).send({ status: 'alive' });
     });
 
-    // MCP JSON-RPC endpoint
+    // MCP JSON-RPC endpoint (Streamable HTTP transport — single JSON response form)
     this.app.post('/mcp', async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const rpcRequest = request.body as JSONRPCRequest;
@@ -277,8 +277,12 @@ export class McpHttpServer {
           id: rpcRequest.id,
         });
 
-        // Handle the request through the MCP server
         const response = await this.handleMcpRequest(rpcRequest);
+
+        // Notifications (no id) → return 202 sin cuerpo
+        if (response === null) {
+          return reply.code(202).send();
+        }
 
         return reply.send(response);
       } catch (error) {
@@ -409,39 +413,75 @@ export class McpHttpServer {
   }
 
   /**
-   * Handle MCP JSON-RPC request
+   * Handle MCP JSON-RPC request.
+   * Implementa los métodos requeridos por el protocolo MCP (Streamable HTTP transport):
+   *   initialize, notifications/initialized, tools/list, tools/call, ping.
+   * Devuelve null para notificaciones (sin id) — el caller responde 202 sin body.
    */
-  private async handleMcpRequest(request: JSONRPCRequest): Promise<JSONRPCResponse> {
+  private async handleMcpRequest(request: JSONRPCRequest): Promise<JSONRPCResponse | null> {
+    const isNotification = request.id === undefined || request.id === null;
+
     try {
-      // Route based on method
-      if (request.method === 'tools/list') {
-        const result = await this.server.request(
-          { method: 'tools/list', params: {} },
-          ListToolsRequestSchema
-        );
-        return {
-          jsonrpc: '2.0',
-          result,
-          id: request.id,
-        };
-      } else if (request.method === 'tools/call') {
-        const result = await this.server.request(request, CallToolRequestSchema);
-        return {
-          jsonrpc: '2.0',
-          result,
-          id: request.id,
-        };
-      } else {
-        return {
-          jsonrpc: '2.0',
-          error: {
-            code: -32601,
-            message: `Method not found: ${request.method}`,
-          },
-          id: request.id,
-        };
+      switch (request.method) {
+        case 'initialize': {
+          const params = (request.params ?? {}) as { protocolVersion?: string };
+          return {
+            jsonrpc: '2.0',
+            result: {
+              protocolVersion: params.protocolVersion || '2025-03-26',
+              capabilities: { tools: { listChanged: false } },
+              serverInfo: {
+                name: 'notebooklm-mcp-server',
+                version: packageJson.version || '2.0.0',
+              },
+            },
+            id: request.id,
+          } as JSONRPCResponse;
+        }
+
+        case 'notifications/initialized':
+        case 'notifications/cancelled':
+          // No response para notificaciones.
+          return null;
+
+        case 'ping':
+          return { jsonrpc: '2.0', result: {}, id: request.id } as JSONRPCResponse;
+
+        case 'tools/list': {
+          const toolDefinitions = this.tools.getToolDefinitions();
+          const tools: Tool[] = toolDefinitions.map((def) => ({
+            name: def.name,
+            description: def.description,
+            inputSchema: zodToJsonSchema(def.inputSchema) as Tool['inputSchema'],
+          }));
+          return { jsonrpc: '2.0', result: { tools }, id: request.id } as JSONRPCResponse;
+        }
+
+        case 'tools/call': {
+          const params = (request.params ?? {}) as {
+            name: string;
+            arguments?: Record<string, unknown>;
+          };
+          const callResult = await this.tools.handleToolCall(params.name, params.arguments);
+          return {
+            jsonrpc: '2.0',
+            result: {
+              content: [{ type: 'text', text: JSON.stringify(callResult, null, 2) }],
+            },
+            id: request.id,
+          } as JSONRPCResponse;
+        }
+
+        default:
+          if (isNotification) return null;
+          return {
+            jsonrpc: '2.0',
+            error: { code: -32601, message: `Method not found: ${request.method}` },
+            id: request.id,
+          } as JSONRPCResponse;
       }
     } catch (error) {
+      if (isNotification) return null;
       return {
         jsonrpc: '2.0',
         error: {
@@ -449,7 +489,7 @@ export class McpHttpServer {
           message: error instanceof Error ? error.message : 'Internal error',
         },
         id: request.id,
-      };
+      } as JSONRPCResponse;
     }
   }
 
