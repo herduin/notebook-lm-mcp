@@ -328,12 +328,11 @@ Question: ${question}`,
     total_count?: number;
   }> {
     const targetNotebookId = notebookId || this.config.notebookId;
-    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}/sources`;
+    // El API NotebookLM Enterprise no expone /sources como sub-recurso; las
+    // sources vienen embebidas en el GET del notebook. Hacemos paginación
+    // client-side sobre ese array.
+    const endpoint = `${this.baseUrl}/notebooks/${targetNotebookId}`;
     const accessToken = await this.auth.getAccessToken();
-
-    const params = new URLSearchParams();
-    if (pageSize) params.append('pageSize', pageSize.toString());
-    if (pageToken) params.append('pageToken', pageToken);
 
     logger.debug('Listing notebook sources', {
       notebookId: targetNotebookId,
@@ -341,10 +340,10 @@ Question: ${question}`,
       pageToken,
     });
 
-    const response = await fetch(`${endpoint}?${params}`, {
+    const response = await fetch(endpoint, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       signal: AbortSignal.timeout(this.config.requestTimeoutMs),
@@ -357,20 +356,48 @@ Question: ${question}`,
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data = (await response.json()) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allSources: any[] = Array.isArray(data.sources) ? data.sources : [];
+
+    // Paginación client-side.
+    const startIdx = pageToken ? parseInt(pageToken, 10) || 0 : 0;
+    const size = pageSize && pageSize > 0 ? pageSize : allSources.length;
+    const slice = allSources.slice(startIdx, startIdx + size);
+    const nextIdx = startIdx + slice.length;
+    const nextPageToken = nextIdx < allSources.length ? String(nextIdx) : undefined;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inferType = (s: any): string => {
+      const m = s.metadata || {};
+      if (m.googleDocsMetadata) return 'GOOGLE_DOC';
+      if (m.youtubeMetadata) return 'YOUTUBE';
+      if (m.webMetadata || m.urlMetadata) return 'URL';
+      if (m.pdfMetadata) return 'PDF';
+      if (m.audioMetadata) return 'AUDIO';
+      if (m.textMetadata) return 'TEXT';
+      return s.type || 'OTHER';
+    };
 
     return {
-      sources: (data.sources || []).map((source: any) => ({
-        id: source.name?.split('/').pop() || source.id || 'unknown',
-        name: source.displayName || source.title || 'Unnamed Source',
-        type: source.type || 'OTHER',
-        uri: source.uri || source.url,
-        size: source.sizeBytes,
-        createTime: source.createTime || new Date().toISOString(),
-        updateTime: source.updateTime || new Date().toISOString(),
-        status: source.state || 'COMPLETED',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sources: slice.map((source: any) => ({
+        id: source.sourceId?.id || source.name?.split('/').pop() || 'unknown',
+        name: source.title || source.displayName || 'Unnamed Source',
+        type: inferType(source),
+        uri:
+          source.metadata?.googleDocsMetadata?.documentId ||
+          source.metadata?.webMetadata?.url ||
+          source.uri,
+        size: source.metadata?.wordCount,
+        createTime: source.metadata?.sourceAddedTimestamp || new Date().toISOString(),
+        updateTime:
+          source.metadata?.lastModifiedTimestamp ||
+          source.metadata?.sourceAddedTimestamp ||
+          new Date().toISOString(),
+        status: source.settings?.status || 'SOURCE_STATUS_COMPLETE',
       })),
-      next_page_token: data.nextPageToken,
-      total_count: data.totalSize,
+      next_page_token: nextPageToken,
+      total_count: allSources.length,
     };
   }
 
