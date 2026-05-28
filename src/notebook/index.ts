@@ -28,7 +28,12 @@ export class NotebookLMClient {
     this.cache = new Cache<AskNotebookOutput>(config.cacheTtl);
 
     // NotebookLM Enterprise API base URL
-    this.baseUrl = `https://${config.googleRegion}-discoveryengine.googleapis.com/v1alpha/projects/${config.googleProjectNumber}/locations/${config.googleRegion}`;
+    // 'global' usa host sin prefijo de región; el resto usa {region}-host.
+    const discoveryHost =
+      config.googleRegion === 'global'
+        ? 'discoveryengine.googleapis.com'
+        : `${config.googleRegion}-discoveryengine.googleapis.com`;
+    this.baseUrl = `https://${discoveryHost}/v1alpha/projects/${config.googleProjectNumber}/locations/${config.googleRegion}`;
 
     logger.info('NotebookLMClient initialized', {
       projectId: config.googleProjectId,
@@ -107,7 +112,11 @@ export class NotebookLMClient {
    * NotebookLM query endpoints are not yet publicly available in v1alpha.
    */
   private async callVertexAI(question: string, requestId: string): Promise<AskNotebookOutput> {
-    const endpoint = `https://${this.config.googleRegion}-aiplatform.googleapis.com/v1/projects/${this.config.googleProjectId}/locations/${this.config.googleRegion}/publishers/google/models/${this.config.model}:generateContent`;
+    const aiHost =
+      this.config.googleRegion === 'global'
+        ? 'aiplatform.googleapis.com'
+        : `${this.config.googleRegion}-aiplatform.googleapis.com`;
+    const endpoint = `https://${aiHost}/v1/projects/${this.config.googleProjectId}/locations/${this.config.googleRegion}/publishers/google/models/${this.config.model}:generateContent`;
 
     const accessToken = await retryWithBackoff(
       () => this.auth.getAccessToken(),
