@@ -3,7 +3,7 @@ import { AuthManager } from '../auth/index.js';
 import { NotebookLMClient } from '../notebook/index.js';
 import { Config, HealthStatus, ReadinessStatus } from '../types/index.js';
 import { createLogger } from '../utils/logger.js';
-import { version } from '../../package.json' assert { type: 'json' };
+import packageJson from '../../package.json' with { type: 'json' };
 
 const logger = createLogger('health-server');
 
@@ -45,7 +45,7 @@ export class HealthServer {
         status: 'healthy',
         timestamp: new Date().toISOString(),
         uptime: Math.floor((Date.now() - this.startTime) / 1000),
-        version: version || '1.0.0',
+        version: packageJson.version || '1.0.0',
       };
 
       return reply.code(200).send(health);

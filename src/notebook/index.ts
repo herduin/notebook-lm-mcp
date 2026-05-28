@@ -6,6 +6,13 @@ import { Cache } from '../cache/index.js';
 
 const logger = createLogger('notebook-client');
 
+interface NotebookMetadataResponse {
+  name?: string;
+  title?: string;
+  createTime?: string;
+  updateTime?: string;
+}
+
 /**
  * Client for interacting with NotebookLM Enterprise API
  */
@@ -279,7 +286,7 @@ Question: ${question}`,
       throw new Error(`Failed to get notebook metadata: ${response.status} - ${errorText}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as NotebookMetadataResponse;
 
     return {
       id: data.name?.split('/').pop() || this.config.notebookId,
