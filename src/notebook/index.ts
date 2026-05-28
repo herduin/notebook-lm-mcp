@@ -378,6 +378,17 @@ Question: ${question}`,
       return s.type || 'OTHER';
     };
 
+    // El API devuelve enums tipo SOURCE_STATUS_COMPLETE; el schema publico
+    // expone {PROCESSING, COMPLETED, FAILED}. Normalizamos aqui.
+    const mapStatus = (raw: string | undefined): 'PROCESSING' | 'COMPLETED' | 'FAILED' => {
+      if (!raw) return 'COMPLETED';
+      const v = String(raw).toUpperCase();
+      if (v.includes('FAIL') || v.includes('ERROR')) return 'FAILED';
+      if (v.includes('PROCESS') || v.includes('PENDING') || v.includes('IN_PROGRESS'))
+        return 'PROCESSING';
+      return 'COMPLETED';
+    };
+
     return {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       sources: slice.map((source: any) => ({
@@ -394,7 +405,7 @@ Question: ${question}`,
           source.metadata?.lastModifiedTimestamp ||
           source.metadata?.sourceAddedTimestamp ||
           new Date().toISOString(),
-        status: source.settings?.status || 'SOURCE_STATUS_COMPLETE',
+        status: mapStatus(source.settings?.status),
       })),
       next_page_token: nextPageToken,
       total_count: allSources.length,
