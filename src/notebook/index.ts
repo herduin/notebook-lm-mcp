@@ -125,7 +125,9 @@ export class NotebookLMClient {
                 documentId,
                 error: err instanceof Error ? err.message : 'Unknown',
               });
-              skipped.push(`${title} (${sourceId}): ${err instanceof Error ? err.message : 'unknown'}`);
+              skipped.push(
+                `${title} (${sourceId}): ${err instanceof Error ? err.message : 'unknown'}`
+              );
               return null;
             }
           })
@@ -200,8 +202,7 @@ PREGUNTA: ${question}`;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const aiData = aiRes as any;
       const answer: string =
-        aiData?.candidates?.[0]?.content?.parts?.[0]?.text ||
-        'No se obtuvo respuesta del modelo.';
+        aiData?.candidates?.[0]?.content?.parts?.[0]?.text || 'No se obtuvo respuesta del modelo.';
 
       // 5. Construir citations reales en base a las fuentes que usamos.
       const citations: Citation[] = fragments.map((f) => ({
@@ -680,12 +681,8 @@ PREGUNTA: ${question}`;
     // batchCreate puede devolver un Operation (long-running) o el resultado
     // directamente con { sources: [...] }. Cubrimos ambos casos.
     const firstSource =
-      data?.sources?.[0] ||
-      data?.response?.sources?.[0] ||
-      data?.metadata?.sources?.[0] ||
-      {};
-    const sourceId =
-      firstSource.sourceId?.id || firstSource.name?.split('/').pop() || 'pending';
+      data?.sources?.[0] || data?.response?.sources?.[0] || data?.metadata?.sources?.[0] || {};
+    const sourceId = firstSource.sourceId?.id || firstSource.name?.split('/').pop() || 'pending';
 
     return {
       source_id: sourceId,
